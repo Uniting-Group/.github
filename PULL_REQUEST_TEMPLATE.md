@@ -5,7 +5,7 @@ copilot:summary
 ## Jira
 
 <!-- Sostituire ID-XXXX con il proprio Jira ID -->
-**Task:** [ID-XXXX](https://uniting-group.atlassian.net/browse/ID-XXXX)
+**Task:** [ID-XXXX](https://uniting-emanuelemazzi.atlassian.net/browse/ID-XXXX)
 
 ## Tipo di modifica
 
