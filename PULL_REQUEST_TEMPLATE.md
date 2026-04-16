@@ -1,6 +1,6 @@
 ## Descrizione
 
-<!-- Breve descrizione delle modifiche e del loro scopo -->
+copilot:summary
 
 ## Jira
 
