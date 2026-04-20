@@ -1,6 +1,6 @@
 ## Descrizione
 
-copilot:summary
+@coderabbitai summary
 
 ## Jira
 
