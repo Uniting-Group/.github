@@ -44,3 +44,7 @@
 ## Note
 
 <!-- ✍️ Eventuali note per il reviewer o il team. Opzionale. -->
+
+---
+
+<sub>📚 Dubbi su branch naming, Conventional Commits o flusso di release? → [GIT-WORKFLOW.md](https://github.com/Uniting-Group/org-project/blob/main/GIT-WORKFLOW.md)</sub>
