@@ -43,11 +43,19 @@ jobs:
             let body = original;
 
             // ── 1. Jira ID from branch name ───────────────────────────────
-            // Matches any Jira project prefix: feature/MCP-123, hotfix/ST-45,
-            // chore/FLU-7, feature/CMAI-13, etc. Prefix is 2–10 uppercase letters.
-            const jiraMatch = branch.match(/^(feature|hotfix|chore)\/([A-Z]{2,10}-\d+)/i);
-            if (jiraMatch) {
-              const jiraId = jiraMatch[2].toUpperCase();
+            // Follows the org convention from Uniting-Group/org-project
+            // GIT-WORKFLOW.md §3:
+            //   <tipo>/<JIRA-ID>
+            //   <tipo>/<JIRA-ID>_<breve_descrizione>
+            // Tipo is feature|hotfix|chore. Any Jira project prefix is
+            // accepted (2–10 uppercase letters), so MCP, ST, FLU, CMAI, ID,
+            // etc. all work. The optional descriptive slug accepts `_` (per
+            // the docs) or `-` (accepted in practice) as separator. Anchored
+            // at end ($) to reject malformed suffixes like `MCP-145abc`.
+            const branchPattern = /^(feature|hotfix|chore)\/([A-Z]{2,10}-\d+)([_-][A-Za-z0-9_-]+)?$/i;
+            const branchMatch = branch.match(branchPattern);
+            if (branchMatch) {
+              const jiraId = branchMatch[2].toUpperCase();
               body = body.split('ID-XXXX').join(jiraId);
             }
 
@@ -80,18 +88,32 @@ jobs:
             }
 
             // ── 3. Checklist — branch naming convention ────────────────────
-            if (/^(feature|hotfix|chore)\/[A-Z]{2,10}-\d+/i.test(branch)) {
+            // Toggle both ways so the box correctly reflects the *current*
+            // state if the branch gets renamed (or the PR targets a stale one).
+            if (branchMatch) {
               body = body.replace(
                 '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
                 '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
               );
+            } else {
+              body = body.replace(
+                '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+                '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+              );
             }
 
             // ── 4. Checklist — Conventional Commits ────────────────────────
+            // Toggle both ways so a title edit that breaks CC compliance
+            // flips the box back to unchecked.
             if (ccType) {
               body = body.replace(
                 '- [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
                 '- [x] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
+              );
+            } else {
+              body = body.replace(
+                '- [x] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
+                '- [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
               );
             }
 
