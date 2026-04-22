@@ -5,7 +5,7 @@
 
 ## Jira
 
-<!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feature|hotfix|chore)/MCP-XXX`. Altrimenti sostituisci ID-XXXX manualmente. -->
+<!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>` (es. `feature/MCP-145`, `hotfix/ST-42`, `chore/FLU-7`, `feature/CMAI-13`). Altrimenti sostituisci ID-XXXX manualmente. -->
 **Task:** [ID-XXXX](https://uniting-emanuelemazzi.atlassian.net/browse/ID-XXXX)
 
 ## Tipo di modifica

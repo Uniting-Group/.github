@@ -43,8 +43,9 @@ jobs:
             let body = original;
 
             // ── 1. Jira ID from branch name ───────────────────────────────
-            // Matches: feature/MCP-123, hotfix/MCP-45, chore/MCP-7, ...
-            const jiraMatch = branch.match(/^(feature|hotfix|chore)\/(MCP-\d+)/i);
+            // Matches any Jira project prefix: feature/MCP-123, hotfix/ST-45,
+            // chore/FLU-7, feature/CMAI-13, etc. Prefix is 2–10 uppercase letters.
+            const jiraMatch = branch.match(/^(feature|hotfix|chore)\/([A-Z]{2,10}-\d+)/i);
             if (jiraMatch) {
               const jiraId = jiraMatch[2].toUpperCase();
               body = body.split('ID-XXXX').join(jiraId);
@@ -79,7 +80,7 @@ jobs:
             }
 
             // ── 3. Checklist — branch naming convention ────────────────────
-            if (/^(feature|hotfix|chore)\/MCP-\d+/i.test(branch)) {
+            if (/^(feature|hotfix|chore)\/[A-Z]{2,10}-\d+/i.test(branch)) {
               body = body.replace(
                 '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
                 '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
