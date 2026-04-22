@@ -1,0 +1,17 @@
+name: PR Autofill
+
+# Trigger workflow — delegates to the reusable workflow in Uniting-Group/.github.
+# Populates Jira link, Tipo di modifica, and Checklist items of the org PR
+# template automatically. Safe to enable on any repo in the org.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  autofill:
+    uses: Uniting-Group/.github/.github/workflows/pr-autofill.yml@main
