@@ -1,0 +1,7 @@
+{
+  "name": "PR Autofill",
+  "description": "Popola automaticamente Jira link, tipo di modifica e checkbox auto-verificabili del template PR dell'organizzazione.",
+  "iconName": "octicon pencil",
+  "categories": ["Automation"],
+  "filePatterns": []
+}

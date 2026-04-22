@@ -1,0 +1,147 @@
+name: PR Autofill (reusable)
+
+# Reusable workflow that populates the mechanical parts of the org PR template:
+#   - Jira link (from branch name)
+#   - "Tipo di modifica" checkbox (from Conventional Commits prefix in title)
+#   - First three "Checklist" items (branch naming, CC compliance, no conflicts)
+#
+# It is idempotent: replacements only happen on the verbatim template strings,
+# so manual edits by the author are never overwritten.
+#
+# The remaining sections ("Come testare", "Screenshot", "Note", and the checkboxes
+# "Il codice è stato testato localmente" / "Ho assegnato almeno un reviewer") are
+# intentionally left to the author.
+
+on:
+  workflow_call:
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  autofill:
+    runs-on: ubuntu-latest
+    # Skip PRs from forks — the default GITHUB_TOKEN is read-only there.
+    if: github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    steps:
+      - name: Populate template
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Re-fetch the PR to get a fresh `mergeable` value (the webhook
+            // payload can be stale, especially right after `opened`).
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const branch = pr.head.ref;
+            const title = pr.title;
+            const original = pr.body || '';
+            let body = original;
+
+            // ── 1. Jira ID from branch name ───────────────────────────────
+            // Follows the org convention from Uniting-Group/org-project
+            // GIT-WORKFLOW.md §3:
+            //   <tipo>/<JIRA-ID>
+            //   <tipo>/<JIRA-ID>_<breve_descrizione>
+            // Tipo is feature|hotfix|chore. Any Jira project prefix is
+            // accepted (2–10 uppercase letters), so MCP, ST, FLU, CMAI, ID,
+            // etc. all work. The optional descriptive slug accepts `_` (per
+            // the docs) or `-` (accepted in practice) as separator. Anchored
+            // at end ($) to reject malformed suffixes like `MCP-145abc`.
+            const branchPattern = /^(feature|hotfix|chore)\/([A-Z]{2,10}-\d+)([_-][A-Za-z0-9_-]+)?$/i;
+            const branchMatch = branch.match(branchPattern);
+            if (branchMatch) {
+              const jiraId = branchMatch[2].toUpperCase();
+              body = body.split('ID-XXXX').join(jiraId);
+            }
+
+            // ── 2. Tipo di modifica — check the box matching the CC prefix ─
+            // Matches: feat: / fix(scope): / hotfix!: / refactor: / chore: / docs: / test:
+            const ccMatch = title.match(/^(feat|fix|hotfix|refactor|chore|docs|test)(\([^)]+\))?!?:\s/i);
+            let ccType = null;
+            if (ccMatch) {
+              ccType = ccMatch[1].toLowerCase();
+              const typeLabels = {
+                feat:     '`feat` — Nuova funzionalità',
+                fix:      '`fix` / `hotfix` — Correzione bug',
+                hotfix:   '`fix` / `hotfix` — Correzione bug',
+                refactor: '`refactor` — Refactoring (nessun cambiamento funzionale)',
+                chore:    '`chore` — Manutenzione / aggiornamento dipendenze',
+                docs:     '`docs` — Documentazione',
+                test:     '`test` — Test',
+              };
+              const label = typeLabels[ccType];
+              if (label) {
+                // Only tick if no "Tipo di modifica" box has been ticked yet,
+                // to avoid overwriting a manual choice that differs from the
+                // title (rare, but possible).
+                const typeSection = (body.split('## Checklist')[0] || '');
+                const alreadyTicked = /## Tipo di modifica[\s\S]*?- \[x\]/i.test(typeSection);
+                if (!alreadyTicked) {
+                  body = body.replace(`- [ ] ${label}`, `- [x] ${label}`);
+                }
+              }
+            }
+
+            // ── 3. Checklist — branch naming convention ────────────────────
+            // Toggle both ways so the box correctly reflects the *current*
+            // state if the branch gets renamed (or the PR targets a stale one).
+            if (branchMatch) {
+              body = body.replace(
+                '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+                '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+              );
+            } else {
+              body = body.replace(
+                '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+                '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+              );
+            }
+
+            // ── 4. Checklist — Conventional Commits ────────────────────────
+            // Toggle both ways so a title edit that breaks CC compliance
+            // flips the box back to unchecked.
+            if (ccType) {
+              body = body.replace(
+                '- [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
+                '- [x] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
+              );
+            } else {
+              body = body.replace(
+                '- [x] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
+                '- [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)',
+              );
+            }
+
+            // ── 5. Checklist — no conflicts with main ──────────────────────
+            // pr.mergeable is `true` / `false` / `null` (still computing).
+            if (pr.mergeable === true) {
+              body = body.replace(
+                '- [ ] Non ci sono conflitti con `main`',
+                '- [x] Non ci sono conflitti con `main`',
+              );
+            } else if (pr.mergeable === false) {
+              // Flip it back if the branch has gained conflicts since last run.
+              body = body.replace(
+                '- [x] Non ci sono conflitti con `main`',
+                '- [ ] Non ci sono conflitti con `main`',
+              );
+            }
+
+            // ── Apply only if something changed (prevents edit-event loops) ─
+            if (body === original) {
+              core.info('No changes needed — body already up to date.');
+              return;
+            }
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              body,
+            });
+            core.info(`PR #${pr.number} body updated.`);
