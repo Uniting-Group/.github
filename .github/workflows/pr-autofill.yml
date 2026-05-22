@@ -1,20 +1,31 @@
-name: PR Autofill (reusable)
+name: PR Autofill
 
-# Reusable workflow that populates the mechanical parts of the org PR template:
-#   - Assignee = PR author (on opened, if no assignees)
-#   - Jira link (from branch name)
-#   - "Tipo di modifica" checkbox (from Conventional Commits prefix in title)
-#   - First three "Checklist" items (branch naming, CC compliance, no conflicts)
+# Workflow che popola le parti meccaniche del template PR dell'org:
+#   - Assignee = autore della PR (su 'opened', se nessuno è già assegnato)
+#   - Jira link (dal nome del branch)
+#   - "Tipo di modifica" checkbox (dal prefisso Conventional Commits del titolo)
+#   - Prime tre voci di "Checklist" (branch naming, CC, no conflicts)
 #
-# It is idempotent: replacements only happen on the verbatim template strings,
-# so manual edits by the author are never overwritten.
+# Idempotente: le sostituzioni avvengono solo sulle stringhe verbatim del
+# template, quindi edit manuali dell'autore non vengono mai sovrascritti.
 #
-# The remaining sections ("Come testare", "Screenshot", "Note", and the checkboxes
-# "Il codice è stato testato localmente" / "Ho assegnato almeno un reviewer") are
-# intentionally left to the author.
+# Le sezioni "Come testare", "Screenshot", "Note" e le checkbox "Il codice è
+# stato testato localmente" / "Ho assegnato almeno un reviewer" restano
+# intenzionalmente da compilare a mano dall'autore.
+#
+# Doppio trigger:
+#   - workflow_call: invocabile da workflow trigger di repo specifici (uso
+#     legacy, prima dell'org Ruleset).
+#   - pull_request: invocato direttamente come "Required Workflow" via
+#     Organization Ruleset sui repo target (oggi st-*, mcp-*, ctx-*).
+#     Vedere docs/RULESETS.md (TODO).
+#
+# Lo stesso job copre entrambi i casi — non serve duplicare la logica.
 
 on:
   workflow_call:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   pull-requests: write
