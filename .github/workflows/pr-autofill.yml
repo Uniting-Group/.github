@@ -1,7 +1,7 @@
-name: PR Autofill (reusable)
+name: PR Autofill
 
-# Reusable workflow that populates the mechanical parts of the org PR template:
-#   - Assignee = PR author (on opened, if no assignees)
+# Workflow that populates the mechanical parts of the org PR template:
+#   - Assignee = PR author (on 'opened', if no assignees yet)
 #   - Jira link (from branch name)
 #   - "Tipo di modifica" checkbox (from Conventional Commits prefix in title)
 #   - First three "Checklist" items (branch naming, CC compliance, no conflicts)
@@ -12,9 +12,19 @@ name: PR Autofill (reusable)
 # The remaining sections ("Come testare", "Screenshot", "Note", and the checkboxes
 # "Il codice è stato testato localmente" / "Ho assegnato almeno un reviewer") are
 # intentionally left to the author.
+#
+# Dual trigger:
+#   - workflow_call: invokable from per-repo trigger workflows (legacy usage,
+#     before the org Ruleset).
+#   - pull_request: invoked directly as a "Required Workflow" via Organization
+#     Ruleset on target repos (today: st-*, mcp-*, ctx-*).
+#
+# A single job covers both cases — no logic duplication.
 
 on:
   workflow_call:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   pull-requests: write
