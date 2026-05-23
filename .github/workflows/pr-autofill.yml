@@ -13,18 +13,28 @@ name: PR Autofill
 # "Il codice è stato testato localmente" / "Ho assegnato almeno un reviewer") are
 # intentionally left to the author.
 #
-# Dual trigger:
+# Triggers:
 #   - workflow_call: invokable from per-repo trigger workflows (legacy usage,
 #     before the org Ruleset).
 #   - pull_request: invoked directly as a "Required Workflow" via Organization
-#     Ruleset on target repos (today: st-*, mcp-*, ctx-*).
+#     Ruleset on target repos (today: st-*, mcp-*, ctx-*). This is when the
+#     real work (assign + autofill) happens.
+#   - push (non-main): same workflow runs as a no-op on every push to feature
+#     branches, so the "required workflow" rule (which checks each push SHA,
+#     not just PR events) finds a successful run and lets the push through.
+#     Without this, pushing to a brand-new branch would be blocked: the rule
+#     would wait for a workflow run that never came (workflow only triggered
+#     on PR events).
 #
-# A single job covers both cases — no logic duplication.
+# A single job covers all cases: step-level conditionals decide what runs.
 
 on:
   workflow_call:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  push:
+    branches-ignore:
+      - main
 
 permissions:
   pull-requests: write
@@ -34,14 +44,30 @@ permissions:
 jobs:
   autofill:
     runs-on: ubuntu-latest
-    # Skip PRs from forks — the default GITHUB_TOKEN is read-only there.
-    if: github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    # Always run on push (so the required-workflow check is satisfied for
+    # every SHA). On pull_request, skip PRs from forks — the default
+    # GITHUB_TOKEN is read-only there.
+    if: |
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     steps:
+      - name: Push event — no-op for required-workflow check
+        # On push the autofill steps can't run (no PR context) and don't need
+        # to: any PR opened on this branch will retrigger the workflow on
+        # pull_request and do the real work. This step just provides a
+        # successful step so the run's conclusion is "success", which is what
+        # the org Ruleset's `workflows` rule looks for.
+        if: github.event_name == 'push'
+        run: |
+          echo "Push event on branch '${GITHUB_REF#refs/heads/}'. No PR context, autofill skipped."
+          echo "This run exists to satisfy the org-level required-workflow check."
+
       - name: Auto-assign author
         # Only on initial open, only if nobody is already assigned, only for
         # human authors. Edits/syncs/reopens leave existing assignees alone so
         # a deliberate manual re-assignment is not undone.
         if: |
+          github.event_name == 'pull_request' &&
           github.event.action == 'opened' &&
           github.event.pull_request.assignees[0] == null &&
           github.event.pull_request.user.type != 'Bot'
@@ -64,6 +90,7 @@ jobs:
             }
 
       - name: Populate template
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
