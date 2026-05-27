@@ -23,7 +23,7 @@
 
 <!-- 🤖 Le prime due e "Non ci sono conflitti" sono auto-verificate. Le altre due sono dichiarazioni tue. -->
 
-- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`
+- [ ] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`
 - [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)
 - [ ] Il codice è stato testato localmente
 - [ ] Non ci sono conflitti con `main`

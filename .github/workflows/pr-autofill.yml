@@ -112,12 +112,12 @@ jobs:
             // GIT-WORKFLOW.md §3:
             //   <tipo>/<JIRA-ID>
             //   <tipo>/<JIRA-ID>_<breve_descrizione>
-            // Tipo is feature|hotfix|chore. Any Jira project prefix is
+            // Tipo is feat|hotfix|chore. Any Jira project prefix is
             // accepted (2–10 uppercase letters), so MCP, ST, FLU, CMAI, ID,
             // etc. all work. The optional descriptive slug accepts `_` (per
             // the docs) or `-` (accepted in practice) as separator. Anchored
             // at end ($) to reject malformed suffixes like `MCP-145abc`.
-            const branchPattern = /^(feature|hotfix|chore)\/([A-Z]{2,10}-\d+)([_-][A-Za-z0-9_-]+)?$/i;
+            const branchPattern = /^(feat|hotfix|chore)\/([A-Z]{2,10}-\d+)([_-][A-Za-z0-9_-]+)?$/i;
             const branchMatch = branch.match(branchPattern);
             if (branchMatch) {
               const jiraId = branchMatch[2].toUpperCase();
@@ -157,13 +157,13 @@ jobs:
             // state if the branch gets renamed (or the PR targets a stale one).
             if (branchMatch) {
               body = body.replace(
-                '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
-                '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+                '- [ ] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
+                '- [x] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
               );
             } else {
               body = body.replace(
-                '- [x] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
-                '- [ ] Il branch segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>`',
+                '- [x] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
+                '- [ ] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
               );
             }
 
