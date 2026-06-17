@@ -94,6 +94,11 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
+            // Template population is best-effort: a GitHub API hiccup (e.g. a
+            // transient 502 on pulls.get/pulls.update) must never fail this
+            // required check, since it only fills cosmetic parts of the PR
+            // template. Mirrors the try/catch in "Auto-assign author".
+            try {
             // Re-fetch the PR to get a fresh `mergeable` value (the webhook
             // payload can be stale, especially right after `opened`).
             const { data: pr } = await github.rest.pulls.get({
@@ -210,3 +215,9 @@ jobs:
               body,
             });
             core.info(`PR #${pr.number} body updated.`);
+            } catch (err) {
+              // Swallow API/runtime errors so a transient GitHub failure on a
+              // purely cosmetic step can't block the PR. Surface it as a
+              // warning for visibility instead of failing the required check.
+              core.warning(`PR Autofill: template population skipped (${err.status || 'error'}): ${err.message}`);
+            }
