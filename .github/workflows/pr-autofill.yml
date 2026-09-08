@@ -117,12 +117,13 @@ jobs:
             // GIT-WORKFLOW.md §3:
             //   <tipo>/<JIRA-ID>
             //   <tipo>/<JIRA-ID>_<breve_descrizione>
-            // Tipo is feat|hotfix|chore. Any Jira project prefix is
+            // Tipo is feat|fix|refactor|chore|docs (GIT-WORKFLOW §3, the five
+            // CI-whitelisted prefixes). Any Jira project prefix is
             // accepted (2–10 uppercase letters), so MCP, ST, FLU, CMAI, ID,
             // etc. all work. The optional descriptive slug accepts `_` (per
             // the docs) or `-` (accepted in practice) as separator. Anchored
             // at end ($) to reject malformed suffixes like `MCP-145abc`.
-            const branchPattern = /^(feat|hotfix|chore)\/([A-Z]{2,10}-\d+)([_-][A-Za-z0-9_-]+)?$/i;
+            const branchPattern = /^(feat|fix|refactor|chore|docs)\/([A-Z]{2,10}-\d+)([_-][A-Za-z0-9_-]+)?$/i;
             const branchMatch = branch.match(branchPattern);
             if (branchMatch) {
               const jiraId = branchMatch[2].toUpperCase();
@@ -130,15 +131,17 @@ jobs:
             }
 
             // ── 2. Tipo di modifica — check the box matching the CC prefix ─
-            // Matches: feat: / fix(scope): / hotfix!: / refactor: / chore: / docs: / test:
+            // Matches: feat: / fix(scope): / refactor: / chore: / docs: / test:
+            // `hotfix` is still accepted as input (legacy habit) but maps to
+            // the `fix` checkbox: it is not a valid type per GIT-WORKFLOW §7.
             const ccMatch = title.match(/^(feat|fix|hotfix|refactor|chore|docs|test)(\([^)]+\))?!?:\s/i);
             let ccType = null;
             if (ccMatch) {
               ccType = ccMatch[1].toLowerCase();
               const typeLabels = {
                 feat:     '`feat` — Nuova funzionalità',
-                fix:      '`fix` / `hotfix` — Correzione bug',
-                hotfix:   '`fix` / `hotfix` — Correzione bug',
+                fix:      '`fix` — Correzione bug',
+                hotfix:   '`fix` — Correzione bug',
                 refactor: '`refactor` — Refactoring (nessun cambiamento funzionale)',
                 chore:    '`chore` — Manutenzione / aggiornamento dipendenze',
                 docs:     '`docs` — Documentazione',
@@ -162,13 +165,13 @@ jobs:
             // state if the branch gets renamed (or the PR targets a stale one).
             if (branchMatch) {
               body = body.replace(
-                '- [ ] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
-                '- [x] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
+                '- [ ] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`',
+                '- [x] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`',
               );
             } else {
               body = body.replace(
-                '- [x] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
-                '- [ ] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`',
+                '- [x] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`',
+                '- [ ] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`',
               );
             }
 
