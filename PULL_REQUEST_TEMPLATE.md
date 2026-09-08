@@ -5,7 +5,7 @@
 
 ## Jira
 
-<!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feature|hotfix|chore)/<JIRA-ID>` (es. `feature/MCP-145`, `hotfix/ST-42`, `chore/FLU-7`, `feature/CMAI-13`). Altrimenti sostituisci ID-XXXX manualmente. -->
+<!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>` (es. `feat/MCP-145`, `fix/ST-42`, `chore/FLU-7`, `docs/ONE-13`). Altrimenti sostituisci ID-XXXX manualmente. -->
 **Task:** [ID-XXXX](https://uniting-emanuelemazzi.atlassian.net/browse/ID-XXXX)
 
 ## Tipo di modifica
@@ -13,7 +13,7 @@
 <!-- 🤖 Auto-spuntato dal prefisso Conventional Commit del titolo della PR. -->
 
 - [ ] `feat` — Nuova funzionalità
-- [ ] `fix` / `hotfix` — Correzione bug
+- [ ] `fix` — Correzione bug
 - [ ] `refactor` — Refactoring (nessun cambiamento funzionale)
 - [ ] `chore` — Manutenzione / aggiornamento dipendenze
 - [ ] `docs` — Documentazione
@@ -23,7 +23,7 @@
 
 <!-- 🤖 Le prime due e "Non ci sono conflitti" sono auto-verificate. Le altre due sono dichiarazioni tue. -->
 
-- [ ] Il branch segue la convenzione `(feat|hotfix|chore)/<JIRA-ID>`
+- [ ] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`
 - [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)
 - [ ] Il codice è stato testato localmente
 - [ ] Non ci sono conflitti con `main`
