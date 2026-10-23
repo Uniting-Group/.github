@@ -155,14 +155,17 @@ jobs:
               // The template counts as present when the body has our marker
               // (left by a previous injection, so a reopen never adds a
               // second copy, however much the author edited it), or one of
-              // the template's HTML comments (stable: the web UI copies them
-              // and authors rarely touch them), or at least half of its
-              // headings — whatever the template's own wording is.
+              // the template's opening text or HTML comments (stable: the web
+              // UI copies them and authors rarely touch them, and they cover
+              // plain templates without `##` headings), or at least half of
+              // its headings — whatever the template's own wording is.
               const injected = '<!-- pr-autofill:template -->';
               const headings = template ? template.match(/^#{2,3} .+$/gm) || [] : [];
               const comments = template ? template.match(/<!--[\s\S]*?-->/g) || [] : [];
               const found = headings.filter((h) => body.includes(h)).length;
+              const opening = template ? template.trim().slice(0, 200) : '';
               const hasTemplate = body.includes(injected)
+                || (opening && body.includes(opening))
                 || comments.some((c) => body.includes(c))
                 || (headings.length > 0 && found * 2 >= headings.length);
               if (template && !hasTemplate) {
@@ -254,8 +257,9 @@ jobs:
               // neither break our markers nor mention someone. The list is
               // bounded (count and subject length) to stay well within the
               // 65,536-character limit of the PR body, and keeps the latest
-              // commits, so a push always shows up. The endpoint returns at
-              // most 250 commits: beyond that the oldest are simply unknown.
+              // commits, so a push always shows up. The endpoint returns only
+              // the first 250 commits: past that the list is partial and may
+              // miss the newest ones, and the note says so.
               const maxCommits = 100;
               const maxSubject = 200;
               const own = commits.filter((c) => (c.parents || []).length < 2);
@@ -266,7 +270,9 @@ jobs:
                 subject = subject.replace(/</g, '&lt;').replace(/@/g, '@&#8203;');
                 return `- ${subject} (${c.sha.slice(0, 7)})`;
               });
-              if (own.length > shown.length || pr.commits > commits.length) {
+              if (pr.commits > commits.length) {
+                lines.unshift(`- ⚠️ La PR ha ${pr.commits} commit e GitHub ne restituisce solo i primi ${commits.length}: l'elenco è parziale e può non includere i più recenti (vedi la scheda *Commits*)`);
+              } else if (own.length > shown.length) {
                 lines.unshift('- … commit precedenti non elencati (vedi la scheda *Commits*)');
               }
               const list = lines.join('\n') || '_Nessun commit._';
