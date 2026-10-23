@@ -152,18 +152,24 @@ jobs:
                 if (template) break;
               }
               template = template || await readFile('.github', 'PULL_REQUEST_TEMPLATE.md');
-              // The template counts as present when the body already has at
-              // least half of its headings: true for a template applied by
-              // the web UI or by a previous run (so a reopen never adds a
-              // second copy), whatever the template's own headings are.
+              // The template counts as present when the body has our marker
+              // (left by a previous injection, so a reopen never adds a
+              // second copy, however much the author edited it), or one of
+              // the template's HTML comments (stable: the web UI copies them
+              // and authors rarely touch them), or at least half of its
+              // headings — whatever the template's own wording is.
+              const injected = '<!-- pr-autofill:template -->';
               const headings = template ? template.match(/^#{2,3} .+$/gm) || [] : [];
+              const comments = template ? template.match(/<!--[\s\S]*?-->/g) || [] : [];
               const found = headings.filter((h) => body.includes(h)).length;
-              const hasTemplate = headings.length > 0 && found * 2 >= headings.length;
+              const hasTemplate = body.includes(injected)
+                || comments.some((c) => body.includes(c))
+                || (headings.length > 0 && found * 2 >= headings.length);
               if (template && !hasTemplate) {
                 // Keep what the author wrote (e.g. commit bodies from
                 // `--fill`) in "Note", or at the end if the template has none.
                 const authorText = body.trim();
-                body = template;
+                body = `${template.trimEnd()}\n\n${injected}\n`;
                 if (authorText) {
                   const note = /## Note[^\n]*\n(?:\s*<!--[\s\S]*?-->\n)?/;
                   body = note.test(body)
@@ -191,8 +197,9 @@ jobs:
             //   - no CC type → the branch type (`feat/ONE-1_x` → `feat:`)
             //   - a title that is just the branch name (default of the web UI
             //     and of `--fill` with several commits) → the branch slug
-            //   - no ID of the branch's Jira project anywhere in the title →
-            //     the branch Jira ID, right after the type
+            //   - the branch Jira ID missing from the title → added right
+            //     after the type (other IDs in the title stay as references)
+            //   - a result over GitHub's 256-character limit → title untouched
             // The bare `@coderabbitai` placeholder is left alone: CodeRabbit
             // rewrites it, with the Jira ID (org `auto_title_instructions`).
             // A title edit does not re-run this workflow under the Ruleset
@@ -200,7 +207,6 @@ jobs:
             // leaves out is completed at the next push.
             if (branchMatch && title.trim() !== '@coderabbitai') {
               const jiraId = branchMatch[2].toUpperCase();
-              const jiraProject = jiraId.split('-')[0];
               const typePrefix = /^(feat|fix|hotfix|refactor|chore|docs|test|style|build|perf|ci)(\([^)]+\))?!?:\s*/i;
               let subject = title.trim();
               let prefix = `${branchMatch[1].toLowerCase()}:`;
@@ -214,20 +220,20 @@ jobs:
                   subject = (branchMatch[3] || '').replace(/[_-]+/g, ' ').trim();
                 }
               }
-              // An ID already there is kept where it is: a leading one only
-              // loses its brackets (`[ONE-1]`), one later in the text (`feat:
-              // risolve ONE-1`) is not duplicated. Only the branch's project
-              // counts, case-sensitive, so `UTF-8` is not taken for an ID.
-              const idMatch = subject.match(new RegExp(`^\\[?(${jiraProject}-\\d+)\\]?[\\s:–-]*`));
-              const projectId = new RegExp(`\\b${jiraProject}-\\d+\\b`);
+              // The branch ID already there is kept where it is: a leading one
+              // only loses its brackets (`[ONE-1]`), one later in the text
+              // (`feat: risolve ONE-1`) is not duplicated. Case-sensitive and
+              // on the exact ID, so `UTF-8` or another task's ID don't count.
+              const escaped = jiraId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const leading = subject.match(new RegExp(`^\\[?${escaped}\\]?(?!\\d)[\\s:–-]*`));
               let id = jiraId;
-              if (idMatch) {
-                id = idMatch[1];
-                subject = subject.slice(idMatch[0].length);
-              } else if (projectId.test(subject)) {
+              if (leading) {
+                subject = subject.slice(leading[0].length);
+              } else if (new RegExp(`\\b${escaped}\\b`).test(subject)) {
                 id = null;
               }
-              title = [prefix, id, subject].filter(Boolean).join(' ');
+              const candidate = [prefix, id, subject].filter(Boolean).join(' ');
+              if (candidate.length <= 256) title = candidate;
             }
 
             // ── 0c. Commit list in "Descrizione" ───────────────────────────
@@ -247,18 +253,21 @@ jobs:
               // the change. `<` and `@` are neutralised so a subject can
               // neither break our markers nor mention someone. The list is
               // bounded (count and subject length) to stay well within the
-              // 65,536-character limit of the PR body.
+              // 65,536-character limit of the PR body, and keeps the latest
+              // commits, so a push always shows up. The endpoint returns at
+              // most 250 commits: beyond that the oldest are simply unknown.
               const maxCommits = 100;
               const maxSubject = 200;
               const own = commits.filter((c) => (c.parents || []).length < 2);
-              const lines = own.slice(0, maxCommits).map((c) => {
+              const shown = own.slice(-maxCommits);
+              const lines = shown.map((c) => {
                 let subject = c.commit.message.split('\n')[0];
                 if (subject.length > maxSubject) subject = `${subject.slice(0, maxSubject)}…`;
                 subject = subject.replace(/</g, '&lt;').replace(/@/g, '@&#8203;');
                 return `- ${subject} (${c.sha.slice(0, 7)})`;
               });
-              if (own.length > maxCommits) {
-                lines.push(`- … e altri ${own.length - maxCommits} commit (vedi la scheda *Commits*)`);
+              if (own.length > shown.length || pr.commits > commits.length) {
+                lines.unshift('- … commit precedenti non elencati (vedi la scheda *Commits*)');
               }
               const list = lines.join('\n') || '_Nessun commit._';
               body = body.slice(0, startAt + commitsStart.length)
