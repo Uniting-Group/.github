@@ -26,6 +26,9 @@ name: PR Autofill
 #   - pull_request: invoked directly as a "Required Workflow" via Organization
 #     Ruleset on target repos (all repos, except the ones listed in the
 #     ruleset). This is when the real work (assign + autofill) happens.
+#     Under the Ruleset only opened/synchronize/reopened start a run:
+#     `edited` works only where the workflow is called from the repo itself,
+#     so a title or body edit is picked up at the next push.
 #   - push (non-main): same workflow runs as a no-op on every push to feature
 #     branches, so the "required workflow" rule (which checks each push SHA,
 #     not just PR events) finds a successful run and lets the push through.
@@ -124,9 +127,8 @@ jobs:
             // GitHub applies the template only in the web UI: `gh pr create`
             // with --body/--fill, the API and other tools open PRs with an
             // empty body or with the commit messages. Only on opened/reopened:
-            // removing the template in a later edit is a deliberate choice.
-            const hasTemplate = body.includes('## Tipo di modifica') && body.includes('## Checklist');
-            if (!hasTemplate && ['opened', 'reopened'].includes(context.payload.action)) {
+            // removing the template later on is a deliberate choice.
+            if (['opened', 'reopened'].includes(context.payload.action)) {
               const readFile = async (repo, path, ref) => {
                 try {
                   const { data } = await github.rest.repos.getContent({
@@ -150,7 +152,14 @@ jobs:
                 if (template) break;
               }
               template = template || await readFile('.github', 'PULL_REQUEST_TEMPLATE.md');
-              if (template) {
+              // The template counts as present when the body already has at
+              // least half of its headings: true for a template applied by
+              // the web UI or by a previous run (so a reopen never adds a
+              // second copy), whatever the template's own headings are.
+              const headings = template ? template.match(/^#{2,3} .+$/gm) || [] : [];
+              const found = headings.filter((h) => body.includes(h)).length;
+              const hasTemplate = headings.length > 0 && found * 2 >= headings.length;
+              if (template && !hasTemplate) {
                 // Keep what the author wrote (e.g. commit bodies from
                 // `--fill`) in "Note", or at the end if the template has none.
                 const authorText = body.trim();
@@ -182,11 +191,16 @@ jobs:
             //   - no CC type → the branch type (`feat/ONE-1_x` → `feat:`)
             //   - a title that is just the branch name (default of the web UI
             //     and of `--fill` with several commits) → the branch slug
-            //   - no Jira ID after the type → the branch Jira ID
+            //   - no ID of the branch's Jira project anywhere in the title →
+            //     the branch Jira ID, right after the type
             // The bare `@coderabbitai` placeholder is left alone: CodeRabbit
-            // rewrites it, and the `edited` run that follows completes it.
+            // rewrites it, with the Jira ID (org `auto_title_instructions`).
+            // A title edit does not re-run this workflow under the Ruleset
+            // (only opened/synchronize/reopened do), so anything CodeRabbit
+            // leaves out is completed at the next push.
             if (branchMatch && title.trim() !== '@coderabbitai') {
               const jiraId = branchMatch[2].toUpperCase();
+              const jiraProject = jiraId.split('-')[0];
               const typePrefix = /^(feat|fix|hotfix|refactor|chore|docs|test|style|build|perf|ci)(\([^)]+\))?!?:\s*/i;
               let subject = title.trim();
               let prefix = `${branchMatch[1].toLowerCase()}:`;
@@ -200,12 +214,19 @@ jobs:
                   subject = (branchMatch[3] || '').replace(/[_-]+/g, ' ').trim();
                 }
               }
-              // An ID already there (any project, also as `[ONE-1]`) is kept:
-              // only a missing one is added. Case-sensitive on purpose, so
-              // words like `utf-8` are not taken for an ID.
-              const idMatch = subject.match(/^\[?([A-Z]{2,10}-\d+)\]?[\s:–-]*/);
-              const id = idMatch ? idMatch[1] : jiraId;
-              if (idMatch) subject = subject.slice(idMatch[0].length);
+              // An ID already there is kept where it is: a leading one only
+              // loses its brackets (`[ONE-1]`), one later in the text (`feat:
+              // risolve ONE-1`) is not duplicated. Only the branch's project
+              // counts, case-sensitive, so `UTF-8` is not taken for an ID.
+              const idMatch = subject.match(new RegExp(`^\\[?(${jiraProject}-\\d+)\\]?[\\s:–-]*`));
+              const projectId = new RegExp(`\\b${jiraProject}-\\d+\\b`);
+              let id = jiraId;
+              if (idMatch) {
+                id = idMatch[1];
+                subject = subject.slice(idMatch[0].length);
+              } else if (projectId.test(subject)) {
+                id = null;
+              }
               title = [prefix, id, subject].filter(Boolean).join(' ');
             }
 
@@ -224,18 +245,24 @@ jobs:
               });
               // Merge commits (e.g. "Merge branch 'main'") say nothing about
               // the change. `<` and `@` are neutralised so a subject can
-              // neither break our markers nor mention someone.
-              const list = commits
-                .filter((c) => (c.parents || []).length < 2)
-                .map((c) => {
-                  const subject = c.commit.message.split('\n')[0]
-                    .replace(/</g, '&lt;')
-                    .replace(/@/g, '@&#8203;');
-                  return `- ${subject} (${c.sha.slice(0, 7)})`;
-                })
-                .join('\n');
+              // neither break our markers nor mention someone. The list is
+              // bounded (count and subject length) to stay well within the
+              // 65,536-character limit of the PR body.
+              const maxCommits = 100;
+              const maxSubject = 200;
+              const own = commits.filter((c) => (c.parents || []).length < 2);
+              const lines = own.slice(0, maxCommits).map((c) => {
+                let subject = c.commit.message.split('\n')[0];
+                if (subject.length > maxSubject) subject = `${subject.slice(0, maxSubject)}…`;
+                subject = subject.replace(/</g, '&lt;').replace(/@/g, '@&#8203;');
+                return `- ${subject} (${c.sha.slice(0, 7)})`;
+              });
+              if (own.length > maxCommits) {
+                lines.push(`- … e altri ${own.length - maxCommits} commit (vedi la scheda *Commits*)`);
+              }
+              const list = lines.join('\n') || '_Nessun commit._';
               body = body.slice(0, startAt + commitsStart.length)
-                + `\n${list || '_Nessun commit._'}\n`
+                + `\n${list}\n`
                 + body.slice(endAt);
             }
 
@@ -318,6 +345,13 @@ jobs:
                 '- [x] Non ci sono conflitti con `main`',
                 '- [ ] Non ci sono conflitti con `main`',
               );
+            }
+
+            // A body over GitHub's limit would make the update fail, title
+            // included: in that case leave the body as it was.
+            if (body.length > 65536) {
+              core.warning(`PR body would be ${body.length} characters, over GitHub's limit: body left unchanged.`);
+              body = original;
             }
 
             // ── Apply only if something changed (prevents edit-event loops) ─
