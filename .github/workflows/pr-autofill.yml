@@ -168,6 +168,11 @@ jobs:
                 || (opening && body.includes(opening))
                 || comments.some((c) => body.includes(c))
                 || (headings.length > 0 && found * 2 >= headings.length);
+              if (hasTemplate && !body.includes(injected)) {
+                // Recognised now, maybe not after the replacements below
+                // (e.g. `ID-XXXX` in the opening text): mark it for good.
+                body = `${body.trimEnd()}\n\n${injected}\n`;
+              }
               if (template && !hasTemplate) {
                 // Keep what the author wrote (e.g. commit bodies from
                 // `--fill`) in "Note", or at the end if the template has none.
