@@ -3,6 +3,12 @@
 <!-- 🤖 Auto-compilato da CodeRabbit. Non modificare. -->
 @coderabbitai summary
 
+### Commit
+
+<!-- 🤖 Elenco aggiornato da pr-autofill a ogni push. Non modificare. -->
+<!-- pr-autofill:commits:start -->
+<!-- pr-autofill:commits:end -->
+
 ## Jira
 
 <!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>` (es. `feat/MCP-145`, `fix/ST-42`, `chore/FLU-7`, `docs/ONE-13`). Altrimenti sostituisci ID-XXXX manualmente. -->
