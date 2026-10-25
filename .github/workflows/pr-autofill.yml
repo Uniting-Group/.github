@@ -128,9 +128,13 @@ jobs:
             // ── 0. Template — inject it when the PR was opened without ─────
             // GitHub applies the template only in the web UI: `gh pr create`
             // with --body/--fill, the API and other tools open PRs with an
-            // empty body or with the commit messages. Only on opened/reopened:
-            // removing the template later on is a deliberate choice.
-            if (['opened', 'reopened'].includes(context.payload.action)) {
+            // empty body or with the commit messages. On opened/reopened, and
+            // on a push to a PR that never had it (no marker): the 'opened'
+            // run does not exist for a PR opened with merge conflicts or on
+            // another base branch and retargeted to main later. Once the
+            // marker is there, removing the template is a deliberate choice.
+            const injected = '<!-- pr-autofill:template -->';
+            if (['opened', 'reopened'].includes(context.payload.action) || !body.includes(injected)) {
               const readFile = async (repo, path, ref) => {
                 try {
                   const { data } = await github.rest.repos.getContent({
@@ -161,7 +165,6 @@ jobs:
               // UI copies them and authors rarely touch them, and they cover
               // plain templates without `##` headings), or at least half of
               // its headings — whatever the template's own wording is.
-              const injected = '<!-- pr-autofill:template -->';
               const headings = template ? template.match(/^#{2,3} .+$/gm) || [] : [];
               const comments = template ? template.match(/<!--[\s\S]*?-->/g) || [] : [];
               const found = headings.filter((h) => body.includes(h)).length;
