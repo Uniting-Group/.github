@@ -27,7 +27,7 @@
 
 ## Checklist
 
-<!-- 🤖 Spuntate in automatico a ogni push quando risultano vere: branch, Conventional Commits, conflitti e reviewer. ✍️ "Testato localmente" è una dichiarazione tua. I reviewer si chiedono dopo la review AI (CodeRabbit/Copilot): almeno un collega, dal campo Reviewers o con `gh pr edit <n> --add-reviewer <utente>`; se lo fai dopo l'ultimo push, spunta tu la casella. -->
+<!-- 🤖 Aggiornate in automatico all'apertura e a ogni push, secondo lo stato della PR: branch, Conventional Commits, conflitti e reviewer. ✍️ "Testato localmente" è una dichiarazione tua. I reviewer si chiedono dopo la review AI (CodeRabbit/Copilot): almeno un collega, dal campo Reviewers o con `gh pr edit <n> --add-reviewer <utente>`; se lo fai dopo l'ultimo push, spunta tu la casella. -->
 
 - [ ] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`
 - [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)

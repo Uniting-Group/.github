@@ -131,8 +131,9 @@ jobs:
             // empty body or with the commit messages. On opened/reopened, and
             // on a push to a PR that never had it (no marker): the 'opened'
             // run does not exist for a PR opened with merge conflicts or on
-            // another base branch and retargeted to main later. Once the
-            // marker is there, removing the template is a deliberate choice.
+            // another base branch and retargeted to main later. To drop the
+            // template on purpose, delete it but keep the marker line: without
+            // the marker the next push puts it back.
             const injected = '<!-- pr-autofill:template -->';
             if (['opened', 'reopened'].includes(context.payload.action) || !body.includes(injected)) {
               const readFile = async (repo, path, ref) => {
@@ -181,8 +182,18 @@ jobs:
               if (template && !hasTemplate) {
                 // Keep what the author wrote (e.g. commit bodies from
                 // `--fill`) in "Note", or at the end if the template has none.
-                const authorText = body.trim();
+                // A CodeRabbit summary already in the body (it writes one when
+                // it finds no placeholder, e.g. before a late injection on
+                // push) takes the place of the `@coderabbitai summary`
+                // placeholder instead, so it is neither moved to "Note" nor
+                // written twice.
+                let authorText = body.trim();
                 body = `${template.trimEnd()}\n\n${injected}\n`;
+                const summary = authorText.match(/<!-- This is an auto-generated comment: release notes by coderabbit\.ai -->[\s\S]*?<!-- end of auto-generated comment: release notes by coderabbit\.ai -->/);
+                if (summary && body.includes('@coderabbitai summary')) {
+                  body = body.replace('@coderabbitai summary', () => summary[0]);
+                  authorText = authorText.replace(summary[0], '').trim();
+                }
                 if (authorText) {
                   const note = /## Note[^\n]*\n(?:\s*<!--[\s\S]*?-->\n)?/;
                   body = note.test(body)
@@ -373,12 +384,14 @@ jobs:
             }
 
             // ── 6. Checklist — at least one reviewer ───────────────────────
-            // Ticked when a human other than the author is a requested
-            // reviewer (or a team is) or has already reviewed. Only ticked,
-            // never unticked: runs happen at open and on push, not when
-            // reviewers change, so the author may tick it in between.
-            const reviewerBox = '- [ ] Ho assegnato almeno un reviewer';
-            if (body.includes(reviewerBox)) {
+            // A human other than the author is a requested reviewer (or a
+            // team is), or has already reviewed. Toggled both ways like the
+            // boxes above: runs happen at open and on push, not when
+            // reviewers change, so the author may tick it in between, and the
+            // next push confirms it or clears it if nobody is left.
+            const reviewerOff = '- [ ] Ho assegnato almeno un reviewer';
+            const reviewerOn = '- [x] Ho assegnato almeno un reviewer';
+            if (body.includes(reviewerOff) || body.includes(reviewerOn)) {
               const author = pr.user.login;
               const human = (u) => u && u.type !== 'Bot' && u.login !== author;
               let hasReviewer = (pr.requested_teams || []).length > 0
@@ -392,9 +405,9 @@ jobs:
                 });
                 hasReviewer = reviews.some((r) => human(r.user));
               }
-              if (hasReviewer) {
-                body = body.replace(reviewerBox, '- [x] Ho assegnato almeno un reviewer');
-              }
+              body = hasReviewer
+                ? body.replace(reviewerOff, reviewerOn)
+                : body.replace(reviewerOn, reviewerOff);
             }
 
             // A body over GitHub's limit would make the update fail, title
