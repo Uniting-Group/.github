@@ -2,7 +2,8 @@ name: PR Autofill
 
 # Workflow that populates the mechanical parts of the org PR template:
 #   - Assignee = PR author (on every PR run, if nobody is assigned)
-#   - Template itself, when the PR was opened without it (CLI, API, `--fill`)
+#   - Template itself, when the PR was opened without it (CLI, API, `--fill`),
+#     or at the first push of a human-authored PR that never had it
 #   - Title fix-ups: Conventional Commits type and Jira ID from the branch name
 #   - Commit list in "Descrizione" (between the pr-autofill:commits markers)
 #   - Jira link (from branch name)
@@ -14,8 +15,9 @@ name: PR Autofill
 # comes from CodeRabbit (`@coderabbitai summary` placeholder), not from here.
 #
 # It is idempotent: replacements only happen on the verbatim template strings
-# and between our own markers, so manual edits by the author are never
-# overwritten.
+# and between our own markers, so the author's own text is never overwritten.
+# The verifiable checkboxes (reviewer included) follow the state of the PR at
+# each run, both ways.
 #
 # The remaining sections ("Come testare", "Screenshot", "Note", and the checkbox
 # "Il codice è stato testato localmente") are intentionally left to the author.
@@ -29,6 +31,9 @@ name: PR Autofill
 #     Under the Ruleset only opened/synchronize/reopened start a run:
 #     `edited` works only where the workflow is called from the repo itself,
 #     so a title or body edit is picked up at the next push.
+#     No run at all for PRs to another branch (e.g. `staging`: assignee by
+#     hand), nor while a PR has merge conflicts (GitHub starts no
+#     pull_request workflow then): the next push catches up.
 #   - push (non-main): same workflow runs as a no-op on every push to feature
 #     branches, so the "required workflow" rule (which checks each push SHA,
 #     not just PR events) finds a successful run and lets the push through.
@@ -133,9 +138,12 @@ jobs:
             // run does not exist for a PR opened with merge conflicts or on
             // another base branch and retargeted to main later. To drop the
             // template on purpose, delete it but keep the marker line: without
-            // the marker the next push puts it back.
+            // the marker the next push puts it back. Only for human authors:
+            // bots (Dependabot) rewrite their own body on rebase and would
+            // get the template again at every push.
             const injected = '<!-- pr-autofill:template -->';
-            if (['opened', 'reopened'].includes(context.payload.action) || !body.includes(injected)) {
+            const lateInjection = !body.includes(injected) && pr.user.type !== 'Bot';
+            if (['opened', 'reopened'].includes(context.payload.action) || lateInjection) {
               const readFile = async (repo, path, ref) => {
                 try {
                   const { data } = await github.rest.repos.getContent({
@@ -403,7 +411,7 @@ jobs:
                   pull_number: pr.number,
                   per_page: 100,
                 });
-                hasReviewer = reviews.some((r) => human(r.user));
+                hasReviewer = reviews.some((r) => human(r.user) && r.state !== 'DISMISSED');
               }
               body = hasReviewer
                 ? body.replace(reviewerOff, reviewerOn)
