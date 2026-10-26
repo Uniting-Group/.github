@@ -1,13 +1,14 @@
 name: PR Autofill
 
 # Workflow that populates the mechanical parts of the org PR template:
-#   - Assignee = PR author (on 'opened', if no assignees yet)
+#   - Assignee = PR author (on every PR run, if nobody is assigned)
 #   - Template itself, when the PR was opened without it (CLI, API, `--fill`)
 #   - Title fix-ups: Conventional Commits type and Jira ID from the branch name
 #   - Commit list in "Descrizione" (between the pr-autofill:commits markers)
 #   - Jira link (from branch name)
 #   - "Tipo di modifica" checkbox (from Conventional Commits prefix in title)
-#   - First three "Checklist" items (branch naming, CC compliance, no conflicts)
+#   - "Checklist" items it can verify (branch naming, CC compliance, no
+#     conflicts, at least one human reviewer requested or reviewing)
 #
 # Everything is deterministic: no AI is involved. The prose of the description
 # comes from CodeRabbit (`@coderabbitai summary` placeholder), not from here.
@@ -16,9 +17,8 @@ name: PR Autofill
 # and between our own markers, so manual edits by the author are never
 # overwritten.
 #
-# The remaining sections ("Come testare", "Screenshot", "Note", and the checkboxes
-# "Il codice è stato testato localmente" / "Ho assegnato almeno un reviewer") are
-# intentionally left to the author.
+# The remaining sections ("Come testare", "Screenshot", "Note", and the checkbox
+# "Il codice è stato testato localmente") are intentionally left to the author.
 #
 # Triggers:
 #   - workflow_call: invokable from per-repo trigger workflows (legacy usage,
@@ -73,12 +73,14 @@ jobs:
           echo "This run exists to satisfy the org-level required-workflow check."
 
       - name: Auto-assign author
-        # Only on initial open, only if nobody is already assigned, only for
-        # human authors. Edits/syncs/reopens leave existing assignees alone so
-        # a deliberate manual re-assignment is not undone.
+        # On every PR run, only if nobody is assigned, only for human authors.
+        # Not only on 'opened': GitHub starts no pull_request workflow while a
+        # PR has merge conflicts, and under the Ruleset none either for a PR
+        # opened on another branch and retargeted to main later (stacked PRs),
+        # so the 'opened' run may never exist. The next push then catches up.
+        # An existing assignee, author or not, is never touched.
         if: |
           github.event_name == 'pull_request' &&
-          github.event.action == 'opened' &&
           github.event.pull_request.assignees[0] == null &&
           github.event.pull_request.user.type != 'Bot'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -126,9 +128,14 @@ jobs:
             // ── 0. Template — inject it when the PR was opened without ─────
             // GitHub applies the template only in the web UI: `gh pr create`
             // with --body/--fill, the API and other tools open PRs with an
-            // empty body or with the commit messages. Only on opened/reopened:
-            // removing the template later on is a deliberate choice.
-            if (['opened', 'reopened'].includes(context.payload.action)) {
+            // empty body or with the commit messages. On opened/reopened, and
+            // on a push to a PR that never had it (no marker): the 'opened'
+            // run does not exist for a PR opened with merge conflicts or on
+            // another base branch and retargeted to main later. To drop the
+            // template on purpose, delete it but keep the marker line: without
+            // the marker the next push puts it back.
+            const injected = '<!-- pr-autofill:template -->';
+            if (['opened', 'reopened'].includes(context.payload.action) || !body.includes(injected)) {
               const readFile = async (repo, path, ref) => {
                 try {
                   const { data } = await github.rest.repos.getContent({
@@ -159,7 +166,6 @@ jobs:
               // UI copies them and authors rarely touch them, and they cover
               // plain templates without `##` headings), or at least half of
               // its headings — whatever the template's own wording is.
-              const injected = '<!-- pr-autofill:template -->';
               const headings = template ? template.match(/^#{2,3} .+$/gm) || [] : [];
               const comments = template ? template.match(/<!--[\s\S]*?-->/g) || [] : [];
               const found = headings.filter((h) => body.includes(h)).length;
@@ -176,8 +182,18 @@ jobs:
               if (template && !hasTemplate) {
                 // Keep what the author wrote (e.g. commit bodies from
                 // `--fill`) in "Note", or at the end if the template has none.
-                const authorText = body.trim();
+                // A CodeRabbit summary already in the body (it writes one when
+                // it finds no placeholder, e.g. before a late injection on
+                // push) takes the place of the `@coderabbitai summary`
+                // placeholder instead, so it is neither moved to "Note" nor
+                // written twice.
+                let authorText = body.trim();
                 body = `${template.trimEnd()}\n\n${injected}\n`;
+                const summary = authorText.match(/<!-- This is an auto-generated comment: release notes by coderabbit\.ai -->[\s\S]*?<!-- end of auto-generated comment: release notes by coderabbit\.ai -->/);
+                if (summary && body.includes('@coderabbitai summary')) {
+                  body = body.replace('@coderabbitai summary', () => summary[0]);
+                  authorText = authorText.replace(summary[0], '').trim();
+                }
                 if (authorText) {
                   const note = /## Note[^\n]*\n(?:\s*<!--[\s\S]*?-->\n)?/;
                   body = note.test(body)
@@ -365,6 +381,33 @@ jobs:
                 '- [x] Non ci sono conflitti con `main`',
                 '- [ ] Non ci sono conflitti con `main`',
               );
+            }
+
+            // ── 6. Checklist — at least one reviewer ───────────────────────
+            // A human other than the author is a requested reviewer (or a
+            // team is), or has already reviewed. Toggled both ways like the
+            // boxes above: runs happen at open and on push, not when
+            // reviewers change, so the author may tick it in between, and the
+            // next push confirms it or clears it if nobody is left.
+            const reviewerOff = '- [ ] Ho assegnato almeno un reviewer';
+            const reviewerOn = '- [x] Ho assegnato almeno un reviewer';
+            if (body.includes(reviewerOff) || body.includes(reviewerOn)) {
+              const author = pr.user.login;
+              const human = (u) => u && u.type !== 'Bot' && u.login !== author;
+              let hasReviewer = (pr.requested_teams || []).length > 0
+                || (pr.requested_reviewers || []).some(human);
+              if (!hasReviewer) {
+                const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  per_page: 100,
+                });
+                hasReviewer = reviews.some((r) => human(r.user));
+              }
+              body = hasReviewer
+                ? body.replace(reviewerOff, reviewerOn)
+                : body.replace(reviewerOn, reviewerOff);
             }
 
             // A body over GitHub's limit would make the update fail, title

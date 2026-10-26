@@ -11,7 +11,7 @@
 
 ## Jira
 
-<!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>` (es. `feat/MCP-145`, `fix/ST-42`, `chore/FLU-7`, `docs/ONE-13`). Altrimenti sostituisci ID-XXXX manualmente. -->
+<!-- 🤖 Auto-compilato dal branch name se segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>` (es. `feat/MCP-145`, `fix/ST-42`, `chore/FLU-7`, `docs/ONE-13`). Altrimenti sostituisci a mano l'ID nel link qui sotto. -->
 **Task:** [ID-XXXX](https://uniting-emanuelemazzi.atlassian.net/browse/ID-XXXX)
 
 ## Tipo di modifica
@@ -27,7 +27,7 @@
 
 ## Checklist
 
-<!-- 🤖 Le prime due e "Non ci sono conflitti" sono auto-verificate. Le altre due sono dichiarazioni tue. -->
+<!-- 🤖 Aggiornate in automatico all'apertura e a ogni push, secondo lo stato della PR: branch, Conventional Commits, conflitti e reviewer. ✍️ "Testato localmente" è una dichiarazione tua. I reviewer si chiedono dopo la review AI (CodeRabbit/Copilot): almeno un collega, dal campo Reviewers o con `gh pr edit <n> --add-reviewer <utente>`; se lo fai dopo l'ultimo push, spunta tu la casella. -->
 
 - [ ] Il branch segue la convenzione `(feat|fix|refactor|chore|docs)/<JIRA-ID>`
 - [ ] I commit seguono i [Conventional Commits](https://www.conventionalcommits.org/)
@@ -37,11 +37,20 @@
 
 ## Come testare
 
-<!-- ✍️ Compila tu: passi concreti che il reviewer deve seguire per verificare le modifiche. -->
+<!-- ✍️ Compila tu: dove si prova, i passi e l'esito atteso, in modo che un collega o il Product ripeta la prova senza chiederti nulla. Per Chore e Task tecnici è la verifica tecnica: CI verde, deploy su staging riuscito, smoke test di ciò che la modifica tocca. Esempio:
+
+**Ambiente:** staging, https://staging.app.example.it (utente di test: vedi il task Jira)
+1. Apri *Impostazioni → Profilo* e cambia il nome.
+2. Salva e ricarica la pagina.
+**Esito atteso:** compare "Profilo aggiornato" e il nome nuovo resta in alto a destra.
+-->
+
+**Ambiente:**
 
 1.
 2.
-3.
+
+**Esito atteso:**
 
 ## Screenshot (se applicabile)
 
