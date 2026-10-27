@@ -15,8 +15,9 @@ name: PR Autofill
 # Everything is deterministic: no AI is involved. The prose of the description
 # comes from CodeRabbit (`@coderabbitai summary` placeholder), not from here.
 #
-# It is idempotent: replacements only happen on the `ID-XXXX` placeholder and
-# between our own markers, so the author's own text is never overwritten.
+# It is idempotent: replacements only happen between our own markers (and on
+# the `ID-XXXX` placeholder of bodies without them), so the author's own text
+# is never overwritten.
 #
 # The remaining sections ("Come testare", "Screenshot", "Note", and the checkbox
 # "Il codice è stato testato localmente") are intentionally left to the author.
@@ -337,9 +338,14 @@ jobs:
             // JIRA_BASE_URL: the template lives in a public repo, so it
             // carries no Jira address. Without the variable, the bare ID.
             // A branch without the ID leaves the task as the author wrote it.
+            // Bodies without the task markers (older org template, templates
+            // of single repos) still get the `ID-XXXX` placeholder replaced;
+            // with the markers only the task is touched, not the instructions.
             if (branchMatch) {
               const jiraId = branchMatch[2].toUpperCase();
-              body = body.split('ID-XXXX').join(jiraId);
+              if (!body.includes('<!-- pr-autofill:task:start -->')) {
+                body = body.split('ID-XXXX').join(jiraId);
+              }
               const jiraBase = (process.env.JIRA_BASE_URL || '').replace(/\/+$/, '');
               fill('task', jiraBase ? `[${jiraId}](${jiraBase}/browse/${jiraId})` : jiraId);
             }
