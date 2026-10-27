@@ -11,8 +11,8 @@
 
 ## Jira
 
-<!-- 🤖 Task e tipo compilati da pr-autofill: il task dal branch `(feat|fix|refactor|chore|docs)/<JIRA-ID>` (es. `feat/MCP-145`, `docs/ONE-13`), il tipo dal titolo. Se il branch non ha il Jira ID, sostituisci a mano l'ID nel link. -->
-**Task:** [ID-XXXX](https://uniting-emanuelemazzi.atlassian.net/browse/ID-XXXX) · **Tipo:** <!-- pr-autofill:type:start --><!-- pr-autofill:type:end -->
+<!-- 🤖 Task e tipo compilati da pr-autofill: il task dal branch `(feat|fix|refactor|chore|docs)/<JIRA-ID>` (es. `feat/MCP-145`, `docs/ONE-13`), il tipo dal titolo. Se il branch non ha il Jira ID, scrivilo a mano al posto di `ID-XXXX`. -->
+**Task:** <!-- pr-autofill:task:start -->ID-XXXX<!-- pr-autofill:task:end --> · **Tipo:** <!-- pr-autofill:type:start --><!-- pr-autofill:type:end -->
 
 ## Controlli automatici
 

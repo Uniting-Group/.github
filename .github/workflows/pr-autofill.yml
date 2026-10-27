@@ -6,7 +6,7 @@ name: PR Autofill
 #     or at the first push of a human-authored PR that never had it
 #   - Title fix-ups: Conventional Commits type and Jira ID from the branch name
 #   - Commit list in "Descrizione" (between the pr-autofill:commits markers)
-#   - Jira link (from branch name)
+#   - Jira link (from branch name; address from the org variable JIRA_BASE_URL)
 #   - Change type, as text next to the Jira task (from the title prefix)
 #   - "Controlli automatici": status lines for branch naming, CC compliance,
 #     conflicts and reviewers. Status lines, not checkboxes: GitHub counts
@@ -108,6 +108,8 @@ jobs:
       - name: Populate template
         if: github.event_name == 'pull_request'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
         with:
           script: |
             // Template population is best-effort: a GitHub API hiccup (e.g. a
@@ -316,12 +318,6 @@ jobs:
                 + body.slice(endAt);
             }
 
-            // ── 1. Jira ID from branch name ───────────────────────────────
-            if (branchMatch) {
-              const jiraId = branchMatch[2].toUpperCase();
-              body = body.split('ID-XXXX').join(jiraId);
-            }
-
             // Rewrites the text between our own start/end markers, like the
             // commit list: the author never edits it, so it always follows
             // the PR. Bodies without the markers (template of another repo,
@@ -335,6 +331,18 @@ jobs:
                 body = body.slice(0, s + start.length) + text + body.slice(e);
               }
             };
+
+            // ── 1. Jira ID from branch name ───────────────────────────────
+            // The task link is built here, from the org variable
+            // JIRA_BASE_URL: the template lives in a public repo, so it
+            // carries no Jira address. Without the variable, the bare ID.
+            // A branch without the ID leaves the task as the author wrote it.
+            if (branchMatch) {
+              const jiraId = branchMatch[2].toUpperCase();
+              body = body.split('ID-XXXX').join(jiraId);
+              const jiraBase = (process.env.JIRA_BASE_URL || '').replace(/\/+$/, '');
+              fill('task', jiraBase ? `[${jiraId}](${jiraBase}/browse/${jiraId})` : jiraId);
+            }
 
             // ── 2. Type — from the Conventional Commits prefix of the title ─
             // Shown as text next to the Jira task, not as checkboxes: GitHub
