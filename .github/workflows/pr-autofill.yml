@@ -339,10 +339,11 @@ jobs:
             // ── 2. Type — from the Conventional Commits prefix of the title ─
             // Shown as text next to the Jira task, not as checkboxes: GitHub
             // counts every checkbox of the body as a PR task, and the type is
-            // a single choice already in the title. `hotfix` is still
+            // a single choice already in the title. Same types the title fix-up
+            // keeps (GIT-WORKFLOW §7, plus `ci`). `hotfix` is still
             // accepted as input (legacy habit) but shown as `fix`: it is not a
             // valid type per GIT-WORKFLOW §7.
-            const ccMatch = title.match(/^(feat|fix|hotfix|refactor|chore|docs|test)(\([^)]+\))?!?:\s/i);
+            const ccMatch = title.match(/^(feat|fix|hotfix|refactor|chore|docs|test|style|build|perf|ci)(\([^)]+\))?!?:\s/i);
             const ccType = ccMatch ? ccMatch[1].toLowerCase() : null;
             const typeLabels = {
               feat:     '`feat` — Nuova funzionalità',
@@ -352,6 +353,10 @@ jobs:
               chore:    '`chore` — Manutenzione / aggiornamento dipendenze',
               docs:     '`docs` — Documentazione',
               test:     '`test` — Test',
+              style:    '`style` — Formattazione, nessun cambio logico',
+              build:    '`build` — Build, CI/CD, Docker',
+              perf:     '`perf` — Miglioramento performance',
+              ci:       '`ci` — CI/CD',
             };
             fill('type', ccType
               ? typeLabels[ccType]
