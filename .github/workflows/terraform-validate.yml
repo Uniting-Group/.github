@@ -161,7 +161,7 @@ jobs:
           while IFS= read -r c; do
             echo "::group::$c"
             log="$RUNNER_TEMP/init.log"
-            if ! (cd "$c" && terraform init -backend=false -input=false -no-color) > "$log" 2>&1; then
+            if ! (cd -- "./$c" && terraform init -backend=false -input=false -no-color) > "$log" 2>&1; then
               echo "::stop-commands::$tok"; cat "$log"; echo "::$tok::"
               echo "::endgroup::"
               # Le righe "Error:" e "on <file> line <n>", senza il preambolo
@@ -173,10 +173,10 @@ jobs:
               continue
             fi
 
-            json=$(cd "$c" && terraform validate -json -no-color 2>/dev/null)
+            json=$(cd -- "./$c" && terraform validate -json -no-color 2>/dev/null)
             if ! jq -e . >/dev/null 2>&1 <<< "$json"; then
               echo "::stop-commands::$tok"
-              (cd "$c" && terraform validate -no-color)
+              (cd -- "./$c" && terraform validate -no-color)
               echo "::$tok::"
               echo "::endgroup::"
               echo "::error file=$c,title=terraform validate ($c)::terraform validate non ha prodotto un esito leggibile nel componente $c: vedi il log."
