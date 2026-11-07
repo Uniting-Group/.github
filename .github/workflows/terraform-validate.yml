@@ -52,7 +52,18 @@ jobs:
           # grep esce con 1 se non trova nulla: con pipefail lo step morirebbe
           # prima del messaggio qui sotto.
           { grep -rlZE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*backend[[:space:]]+"' . || [ $? -eq 1 ]; } \
-            | xargs -0 -r -n1 dirname | sed 's|^\./||' | sort -u > "$RUNNER_TEMP/components.txt"
+            | xargs -0 -r dirname -z | sort -zu > "$RUNNER_TEMP/components.z"
+          # Il nome del componente finisce in log e annotazioni: solo caratteri
+          # innocui, niente a capo, \r, ':' o ','.
+          : > "$RUNNER_TEMP/components.txt"
+          while IFS= read -r -d '' d; do
+            d=${d#./}
+            if ! [[ "$d" =~ ^[A-Za-z0-9._/\ +@-]+$ ]]; then
+              echo "::error title=Nome di componente non ammesso::Una directory con un blocco backend ha nel nome caratteri non ammessi (solo lettere, cifre, spazio e . _ / + @ -)."
+              exit 1
+            fi
+            printf '%s\n' "$d" >> "$RUNNER_TEMP/components.txt"
+          done < "$RUNNER_TEMP/components.z"
           if [ ! -s "$RUNNER_TEMP/components.txt" ]; then
             echo "::error title=Nessun componente Terraform::Nessuna directory con un blocco backend: non c'è niente da validare. Se il repo non contiene Terraform, togli .github/workflows/validate.yml."
             exit 1
@@ -72,6 +83,9 @@ jobs:
           # comandi di workflow sospesi, così una riga che inizia con `::` in un
           # .tf non diventa un'annotazione o un add-mask.
           tok=$(cat /proc/sys/kernel/random/uuid)
+          # Escape dei comandi di workflow: messaggio e proprietà (file, title).
+          esc() { printf '%s' "$1" | sed 's/%/%25/g; s/\r/%0D/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
+          escprop() { esc "$1" | sed 's/:/%3A/g; s/,/%2C/g'; }
           # Componente di un file: la directory di componente più lunga che lo
           # contiene; "fuori dai componenti" per tfvars o script altrove.
           component_of() {
@@ -102,8 +116,7 @@ jobs:
           # sintassi che impedisce anche di formattare.
           if [ $rc -ne 3 ]; then
             echo "::stop-commands::$tok"; echo "$out"; echo "::$tok::"
-            msg=$(printf '%s' "$out" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=terraform fmt::terraform fmt non riesce a leggere il codice (exit $rc), di solito per un errore di sintassi:%0A$msg"
+            echo "::error title=terraform fmt::terraform fmt non riesce a leggere il codice (exit $rc), di solito per un errore di sintassi:%0A$(esc "$out")"
             echo "| — | errore di sintassi, vedi il log dello step |" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -112,7 +125,7 @@ jobs:
             [ -n "$f" ] || continue
             f=${f#./}
             c=$(component_of "$f")
-            echo "::error file=$f,title=terraform fmt ($c)::$f non è formattato (componente: $c). Dalla radice del repo lancia terraform fmt -recursive e committa."
+            echo "::error file=$(escprop "$f"),title=terraform fmt ($c)::$(esc "$f") non è formattato (componente: $c). Dalla radice del repo lancia terraform fmt -recursive e committa."
             echo "| \`$c\` | \`$f\` |" >> "$GITHUB_STEP_SUMMARY"
           done <<< "$out"
 
@@ -132,7 +145,7 @@ jobs:
           # deve proseguire con gli altri.
           set +e -uo pipefail
           # I messaggi delle annotazioni vanno su una riga sola.
-          oneline() { printf '%s' "$1" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
+          oneline() { printf '%s' "$1" | sed 's/%/%25/g; s/\r/%0D/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
           # Log e diagnostiche contengono testo della PR: si stampano con i
           # comandi di workflow sospesi (vedi lo step fmt).
           tok=$(cat /proc/sys/kernel/random/uuid)
