@@ -63,7 +63,9 @@ jobs:
       - name: terraform fmt
         id: fmt
         run: |
-          set -uo pipefail
+          # La shell di default ha -e: senza `set +e` lo step uscirebbe al
+          # primo fmt fallito, prima di scrivere le annotazioni.
+          set +e -uo pipefail
           # Componente di un file: la directory di componente più lunga che lo
           # contiene; "fuori dai componenti" per tfvars o script altrove.
           component_of() {
@@ -118,7 +120,9 @@ jobs:
       - name: terraform init e validate
         if: ${{ !cancelled() && steps.components.outcome == 'success' }}
         run: |
-          set -uo pipefail
+          # Come sopra: validate esce con 1 sui componenti non validi, e lo step
+          # deve proseguire con gli altri.
+          set +e -uo pipefail
           # I messaggi delle annotazioni vanno su una riga sola.
           oneline() { printf '%s' "$1" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
 
