@@ -162,15 +162,19 @@ jobs:
             fi
 
             # Una riga leggibile e un'annotazione sul file per ogni diagnostica.
-            # I path delle diagnostiche sono relativi al componente; range è
-            # facoltativo e detail può andare a capo, quindi le righe le
-            # compone jq, già con l'escape dei comandi di workflow.
+            # I path delle diagnostiche sono relativi al componente (anche
+            # ../modules/... per i moduli locali, da normalizzare perché
+            # l'annotazione si agganci al file); range è facoltativo e detail
+            # può andare a capo, quindi le righe le compone jq, già con
+            # l'escape dei comandi di workflow.
             jq -r --arg c "$c" '
               def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
               def escprop: esc | gsub(":"; "%3A") | gsub(","; "%2C");
+              def normpath: split("/") | reduce .[] as $p ([];
+                if $p == ".." then .[:-1] elif $p == "." or $p == "" then . else . + [$p] end) | join("/");
               .diagnostics[]? |
               (if .severity == "error" then "error" else "warning" end) as $lvl |
-              (if .range.filename then "\($c)/\(.range.filename)" else $c end) as $file |
+              (if .range.filename then "\($c)/\(.range.filename)" | normpath else $c end) as $file |
               (.range.start.line // null) as $line |
               ((.summary // "") + (if (.detail // "") != "" then " — \(.detail)" else "" end)) as $msg |
               "\($lvl): \($file)\(if $line then ":\($line)" else "" end): \($msg)",
