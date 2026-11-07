@@ -68,6 +68,10 @@ jobs:
           # La shell di default ha -e: senza `set +e` lo step uscirebbe al
           # primo fmt fallito, prima di scrivere le annotazioni.
           set +e -uo pipefail
+          # L'output di terraform contiene testo della PR: lo stampo con i
+          # comandi di workflow sospesi, così una riga che inizia con `::` in un
+          # .tf non diventa un'annotazione o un add-mask.
+          tok=$(cat /proc/sys/kernel/random/uuid)
           # Componente di un file: la directory di componente più lunga che lo
           # contiene; "fuori dai componenti" per tfvars o script altrove.
           component_of() {
@@ -97,7 +101,7 @@ jobs:
           # Exit 3 = file non formattati (uno per riga); altro = errore di
           # sintassi che impedisce anche di formattare.
           if [ $rc -ne 3 ]; then
-            echo "$out"
+            echo "::stop-commands::$tok"; echo "$out"; echo "::$tok::"
             msg=$(printf '%s' "$out" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=terraform fmt::terraform fmt non riesce a leggere il codice (exit $rc), di solito per un errore di sintassi:%0A$msg"
             echo "| — | errore di sintassi, vedi il log dello step |" >> "$GITHUB_STEP_SUMMARY"
@@ -113,7 +117,9 @@ jobs:
           done <<< "$out"
 
           echo "::group::Differenze attese da terraform fmt"
+          echo "::stop-commands::$tok"
           terraform fmt -check -recursive -diff -no-color || true
+          echo "::$tok::"
           echo "::endgroup::"
           exit 1
 
@@ -127,6 +133,9 @@ jobs:
           set +e -uo pipefail
           # I messaggi delle annotazioni vanno su una riga sola.
           oneline() { printf '%s' "$1" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
+          # Log e diagnostiche contengono testo della PR: si stampano con i
+          # comandi di workflow sospesi (vedi lo step fmt).
+          tok=$(cat /proc/sys/kernel/random/uuid)
 
           {
             echo "### terraform validate"
@@ -140,7 +149,7 @@ jobs:
             echo "::group::$c"
             log="$RUNNER_TEMP/init.log"
             if ! (cd "$c" && terraform init -backend=false -input=false -no-color) > "$log" 2>&1; then
-              cat "$log"
+              echo "::stop-commands::$tok"; cat "$log"; echo "::$tok::"
               echo "::endgroup::"
               # Le righe "Error:" e "on <file> line <n>", senza il preambolo
               # generico che init antepone agli errori di configurazione.
@@ -153,7 +162,9 @@ jobs:
 
             json=$(cd "$c" && terraform validate -json -no-color 2>/dev/null)
             if ! jq -e . >/dev/null 2>&1 <<< "$json"; then
+              echo "::stop-commands::$tok"
               (cd "$c" && terraform validate -no-color)
+              echo "::$tok::"
               echo "::endgroup::"
               echo "::error file=$c,title=terraform validate ($c)::terraform validate non ha prodotto un esito leggibile nel componente $c: vedi il log."
               echo "| \`$c\` | errore |" >> "$GITHUB_STEP_SUMMARY"
@@ -161,25 +172,28 @@ jobs:
               continue
             fi
 
-            # Una riga leggibile e un'annotazione sul file per ogni diagnostica.
-            # I path delle diagnostiche sono relativi al componente (anche
-            # ../modules/... per i moduli locali, da normalizzare perché
+            # Per ogni diagnostica una riga leggibile nel log e un'annotazione
+            # sul file. I path delle diagnostiche sono relativi al componente
+            # (anche ../modules/... per i moduli locali, da normalizzare perché
             # l'annotazione si agganci al file); range è facoltativo e detail
-            # può andare a capo, quindi le righe le compone jq, già con
-            # l'escape dei comandi di workflow.
-            jq -r --arg c "$c" '
-              def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
-              def escprop: esc | gsub(":"; "%3A") | gsub(","; "%2C");
+            # può andare a capo, quindi le righe le compone jq, con l'escape
+            # dei comandi di workflow nelle annotazioni.
+            diag='
               def normpath: split("/") | reduce .[] as $p ([];
                 if $p == ".." then .[:-1] elif $p == "." or $p == "" then . else . + [$p] end) | join("/");
               .diagnostics[]? |
               (if .severity == "error" then "error" else "warning" end) as $lvl |
               (if .range.filename then "\($c)/\(.range.filename)" | normpath else $c end) as $file |
               (.range.start.line // null) as $line |
-              ((.summary // "") + (if (.detail // "") != "" then " — \(.detail)" else "" end)) as $msg |
-              "\($lvl): \($file)\(if $line then ":\($line)" else "" end): \($msg)",
-              "::\($lvl) file=\($file | escprop)\(if $line then ",line=\($line)" else "" end),title=\("terraform validate (\($c))" | escprop)::\($msg | esc)"
-            ' <<< "$json"
+              ((.summary // "") + (if (.detail // "") != "" then " — \(.detail)" else "" end)) as $msg |'
+            echo "::stop-commands::$tok"
+            jq -r --arg c "$c" "$diag"'
+              "\($lvl): \($file)\(if $line then ":\($line)" else "" end): \($msg)"' <<< "$json"
+            echo "::$tok::"
+            jq -r --arg c "$c" '
+              def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+              def escprop: esc | gsub(":"; "%3A") | gsub(","; "%2C");'"$diag"'
+              "::\($lvl) file=\($file | escprop)\(if $line then ",line=\($line)" else "" end),title=\("terraform validate (\($c))" | escprop)::\($msg | esc)"' <<< "$json"
             echo "::endgroup::"
 
             if [ "$(jq -r '.valid' <<< "$json")" = "true" ]; then
