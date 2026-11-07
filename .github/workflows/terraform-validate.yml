@@ -1,0 +1,225 @@
+name: Terraform Validate
+
+# Controllo statico del codice Terraform dei repo *-infrastructure (ONE-1161):
+# - terraform fmt -check -recursive su tutto il repo;
+# - terraform init -backend=false + terraform validate per ogni componente.
+#
+# Richiamato da un validate.yml minimo in ogni repo, su ogni PR verso main e
+# staging e a ogni push, chiunque sia l'autore. Al contrario di plan.yml non
+# serve l'approvazione di un devops perché qui non arriva nessuna credenziale:
+# niente AWS, niente environment, niente id-token, niente segreti (il
+# chiamante non deve passare `secrets: inherit`). Il token del job è in sola
+# lettura e init gira senza backend, quindi lo state non viene mai letto.
+#
+# Componente = directory che contiene un blocco `backend "..."`: coincide con
+# quello che plan.yml pianifica, sia nei repo con un solo root (terraform/) sia
+# in quelli con una directory top-level per componente. I moduli locali
+# (./modules/...) sono validati attraverso i root che li usano.
+
+on:
+  workflow_call:
+    inputs:
+      terraform_version:
+        description: Vincolo di versione di Terraform, lo stesso di plan.yml.
+        type: string
+        default: "~> 1.10"
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: fmt e validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+      - name: Componenti Terraform
+        id: components
+        run: |
+          set -euo pipefail
+          # grep esce con 1 se non trova nulla: con pipefail lo step morirebbe
+          # prima del messaggio qui sotto.
+          { grep -rlZE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*backend[[:space:]]+"' . || [ $? -eq 1 ]; } \
+            | xargs -0 -r dirname -z | sort -zu > "$RUNNER_TEMP/components.z"
+          # Il nome del componente finisce in log e annotazioni: solo caratteri
+          # innocui, niente a capo, \r, ':' o ','.
+          : > "$RUNNER_TEMP/components.txt"
+          while IFS= read -r -d '' d; do
+            d=${d#./}
+            if ! [[ "$d" =~ ^[A-Za-z0-9._/\ +@-]+$ ]]; then
+              echo "::error title=Nome di componente non ammesso::Una directory con un blocco backend ha nel nome caratteri non ammessi (solo lettere, cifre, spazio e . _ / + @ -)."
+              exit 1
+            fi
+            printf '%s\n' "$d" >> "$RUNNER_TEMP/components.txt"
+          done < "$RUNNER_TEMP/components.z"
+          if [ ! -s "$RUNNER_TEMP/components.txt" ]; then
+            echo "::error title=Nessun componente Terraform::Nessuna directory con un blocco backend: non c'è niente da validare. Se il repo non contiene Terraform, togli .github/workflows/validate.yml."
+            exit 1
+          fi
+          echo "Componenti trovati ($(wc -l < "$RUNNER_TEMP/components.txt")):"
+          sed 's/^/  - /' "$RUNNER_TEMP/components.txt"
+          echo "TF_PLUGIN_CACHE_DIR=$RUNNER_TEMP/tf-plugin-cache" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tf-plugin-cache"
+
+      - name: terraform fmt
+        id: fmt
+        run: |
+          # La shell di default ha -e: senza `set +e` lo step uscirebbe al
+          # primo fmt fallito, prima di scrivere le annotazioni.
+          set +e -uo pipefail
+          # L'output di terraform contiene testo della PR: lo stampo con i
+          # comandi di workflow sospesi, così una riga che inizia con `::` in un
+          # .tf non diventa un'annotazione o un add-mask.
+          tok=$(cat /proc/sys/kernel/random/uuid)
+          # Escape dei comandi di workflow: messaggio e proprietà (file, title).
+          esc() { printf '%s' "$1" | sed 's/%/%25/g; s/\r/%0D/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
+          escprop() { esc "$1" | sed 's/:/%3A/g; s/,/%2C/g'; }
+          # Componente di un file: la directory di componente più lunga che lo
+          # contiene; "fuori dai componenti" per tfvars o script altrove.
+          component_of() {
+            local best=""
+            while IFS= read -r c; do
+              case "$1" in "$c"/*) [ ${#c} -gt ${#best} ] && best="$c" ;; esac
+            done < "$RUNNER_TEMP/components.txt"
+            echo "${best:-fuori dai componenti}"
+          }
+
+          out=$(terraform fmt -check -recursive -no-color 2>&1); rc=$?
+          if [ $rc -eq 0 ]; then
+            echo "Tutti i file Terraform sono formattati."
+            echo "### terraform fmt: ok" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "### terraform fmt: da correggere"
+            echo
+            echo "Dalla radice del repo: \`terraform fmt -recursive\`, poi commit e push."
+            echo
+            echo "| Componente | File |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Exit 3 = file non formattati (uno per riga); altro = errore di
+          # sintassi che impedisce anche di formattare.
+          if [ $rc -ne 3 ]; then
+            echo "::stop-commands::$tok"; echo "$out"; echo "::$tok::"
+            echo "::error title=terraform fmt::terraform fmt non riesce a leggere il codice (exit $rc), di solito per un errore di sintassi:%0A$(esc "$out")"
+            echo "| — | errore di sintassi, vedi il log dello step |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            f=${f#./}
+            c=$(component_of "$f")
+            echo "::error file=$(escprop "$f"),title=terraform fmt ($c)::$(esc "$f") non è formattato (componente: $c). Dalla radice del repo lancia terraform fmt -recursive e committa."
+            echo "| \`$c\` | \`$f\` |" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$out"
+
+          echo "::group::Differenze attese da terraform fmt"
+          echo "::stop-commands::$tok"
+          terraform fmt -check -recursive -diff -no-color || true
+          echo "::$tok::"
+          echo "::endgroup::"
+          exit 1
+
+      # Gira anche se fmt fallisce: chi apre la PR vede tutti i problemi in un
+      # solo giro.
+      - name: terraform init e validate
+        if: ${{ !cancelled() && steps.components.outcome == 'success' }}
+        run: |
+          # Come sopra: validate esce con 1 sui componenti non validi, e lo step
+          # deve proseguire con gli altri.
+          set +e -uo pipefail
+          # I messaggi delle annotazioni vanno su una riga sola.
+          oneline() { printf '%s' "$1" | sed 's/%/%25/g; s/\r/%0D/g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
+          # Log e diagnostiche contengono testo della PR: si stampano con i
+          # comandi di workflow sospesi (vedi lo step fmt).
+          tok=$(cat /proc/sys/kernel/random/uuid)
+
+          {
+            echo "### terraform validate"
+            echo
+            echo "| Componente | Esito |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=()
+          while IFS= read -r c; do
+            echo "::group::$c"
+            log="$RUNNER_TEMP/init.log"
+            if ! (cd -- "./$c" && terraform init -backend=false -input=false -no-color) > "$log" 2>&1; then
+              echo "::stop-commands::$tok"; cat "$log"; echo "::$tok::"
+              echo "::endgroup::"
+              # Le righe "Error:" e "on <file> line <n>", senza il preambolo
+              # generico che init antepone agli errori di configurazione.
+              detail=$(grep -E '^(Error: |  on )' "$log" | grep -v 'encountered problems during initiali' || true)
+              echo "::error file=$c,title=terraform init ($c)::Init senza backend fallito nel componente $c:%0A$(oneline "${detail:-$(tail -n 15 "$log")}")"
+              echo "| \`$c\` | init fallito |" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$c")
+              continue
+            fi
+
+            json=$(cd -- "./$c" && terraform validate -json -no-color 2>/dev/null)
+            if ! jq -e . >/dev/null 2>&1 <<< "$json"; then
+              echo "::stop-commands::$tok"
+              (cd -- "./$c" && terraform validate -no-color)
+              echo "::$tok::"
+              echo "::endgroup::"
+              echo "::error file=$c,title=terraform validate ($c)::terraform validate non ha prodotto un esito leggibile nel componente $c: vedi il log."
+              echo "| \`$c\` | errore |" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$c")
+              continue
+            fi
+
+            # Per ogni diagnostica una riga leggibile nel log e un'annotazione
+            # sul file. I path delle diagnostiche sono relativi al componente
+            # (anche ../modules/... per i moduli locali, da normalizzare perché
+            # l'annotazione si agganci al file); range è facoltativo e detail
+            # può andare a capo, quindi le righe le compone jq, con l'escape
+            # dei comandi di workflow nelle annotazioni.
+            diag='
+              def normpath: split("/") | reduce .[] as $p ([];
+                if $p == ".." then .[:-1] elif $p == "." or $p == "" then . else . + [$p] end) | join("/");
+              .diagnostics[]? |
+              (if .severity == "error" then "error" else "warning" end) as $lvl |
+              (if .range.filename then "\($c)/\(.range.filename)" | normpath else $c end) as $file |
+              (.range.start.line // null) as $line |
+              ((.summary // "") + (if (.detail // "") != "" then " — \(.detail)" else "" end)) as $msg |'
+            echo "::stop-commands::$tok"
+            jq -r --arg c "$c" "$diag"'
+              "\($lvl): \($file)\(if $line then ":\($line)" else "" end): \($msg)"' <<< "$json"
+            echo "::$tok::"
+            jq -r --arg c "$c" '
+              def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+              def escprop: esc | gsub(":"; "%3A") | gsub(","; "%2C");'"$diag"'
+              "::\($lvl) file=\($file | escprop)\(if $line then ",line=\($line)" else "" end),title=\("terraform validate (\($c))" | escprop)::\($msg | esc)"' <<< "$json"
+            echo "::endgroup::"
+
+            if [ "$(jq -r '.valid' <<< "$json")" = "true" ]; then
+              warnings=$(jq '.warning_count' <<< "$json")
+              echo "| \`$c\` | ok$([ "$warnings" -gt 0 ] && echo " ($warnings warning)") |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| \`$c\` | errori: $(jq '.error_count' <<< "$json") |" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$c")
+            fi
+          done < "$RUNNER_TEMP/components.txt"
+
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error title=terraform validate::Componenti non validi: ${failed[*]}. Il dettaglio è nelle annotazioni e nel gruppo di ciascun componente nel log."
+            exit 1
+          fi
+          echo "Tutti i componenti sono validi."
