@@ -49,8 +49,10 @@ jobs:
         id: components
         run: |
           set -euo pipefail
-          grep -rlE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*backend[[:space:]]+"' . \
-            | xargs -r -n1 dirname | sed 's|^\./||' | sort -u > "$RUNNER_TEMP/components.txt"
+          # grep esce con 1 se non trova nulla: con pipefail lo step morirebbe
+          # prima del messaggio qui sotto.
+          { grep -rlZE --include='*.tf' --exclude-dir=.terraform '^[[:space:]]*backend[[:space:]]+"' . || [ $? -eq 1 ]; } \
+            | xargs -0 -r -n1 dirname | sed 's|^\./||' | sort -u > "$RUNNER_TEMP/components.txt"
           if [ ! -s "$RUNNER_TEMP/components.txt" ]; then
             echo "::error title=Nessun componente Terraform::Nessuna directory con un blocco backend: non c'è niente da validare. Se il repo non contiene Terraform, togli .github/workflows/validate.yml."
             exit 1
@@ -160,16 +162,20 @@ jobs:
             fi
 
             # Una riga leggibile e un'annotazione sul file per ogni diagnostica.
-            # I path delle diagnostiche sono relativi al componente.
+            # I path delle diagnostiche sono relativi al componente; range è
+            # facoltativo e detail può andare a capo, quindi le righe le
+            # compone jq, già con l'escape dei comandi di workflow.
             jq -r --arg c "$c" '
+              def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+              def escprop: esc | gsub(":"; "%3A") | gsub(","; "%2C");
               .diagnostics[]? |
+              (if .severity == "error" then "error" else "warning" end) as $lvl |
               (if .range.filename then "\($c)/\(.range.filename)" else $c end) as $file |
-              "\(.severity)\t\($file)\t\(.range.start.line // "")\t\(.summary)\t\(.detail // "")"
-            ' <<< "$json" | while IFS=$'\t' read -r sev file line summary detail; do
-              level=$([ "$sev" = "error" ] && echo error || echo warning)
-              echo "$level: $file${line:+:$line}: $summary${detail:+ — $detail}"
-              echo "::$level file=$file${line:+,line=$line},title=terraform validate ($c)::$(oneline "$summary${detail:+ — $detail}")"
-            done
+              (.range.start.line // null) as $line |
+              ((.summary // "") + (if (.detail // "") != "" then " — \(.detail)" else "" end)) as $msg |
+              "\($lvl): \($file)\(if $line then ":\($line)" else "" end): \($msg)",
+              "::\($lvl) file=\($file | escprop)\(if $line then ",line=\($line)" else "" end),title=\("terraform validate (\($c))" | escprop)::\($msg | esc)"
+            ' <<< "$json"
             echo "::endgroup::"
 
             if [ "$(jq -r '.valid' <<< "$json")" = "true" ]; then
