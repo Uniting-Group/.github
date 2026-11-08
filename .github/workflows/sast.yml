@@ -1,0 +1,117 @@
+name: SAST
+
+# Analisi statica del codice con Semgrep CE sulle PR (ONE-1175).
+#
+# Distribuito come Required Workflow tramite Org Ruleset, come secret-scan.yml:
+# nessun file da aggiungere ai repo. Scelta degli strumenti e soglie
+# nell'ADR org-project/adr/0001-analisi-del-codice.md.
+#
+# Cosa blocca: solo i rilievi NUOVI della PR (baseline = base della PR) con
+# severità ERROR. I WARNING e i rilievi già presenti sul branch di default
+# compaiono nel riepilogo ma non bloccano: li gestisce la scansione settimanale
+# centralizzata (org-config, security-scan.yml), che riporta tutto il branch di
+# default e da cui si aprono i ticket per i rilievi high.
+#
+# Falso positivo: commento `nosemgrep: <rule-id>` con la motivazione sulla
+# stessa riga o su quella sopra. È visibile nel diff, quindi passa dalla review.
+# `.semgrepignore` invece si legge dal branch di default, non dalla PR.
+#
+# Il push su un branch è un no-op: serve solo a dare al Ruleset un run verde
+# per ogni SHA (vedi pr-autofill.yml). L'analisi vera parte sulla PR.
+#
+# Semgrep gira nell'immagine ufficiale pinnata per digest; le regole sono il
+# set pubblico `p/default` del registry Semgrep (scaricate senza login e senza
+# metriche). Il codice non lascia il runner.
+
+on:
+  workflow_call:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  # semgrep/semgrep:1.182.0
+  SEMGREP_IMAGE: semgrep/semgrep@sha256:4a34048c04fef049f71665047f074cffb00cc3d89482f965a5cd151d589237af
+  SEMGREP_RULES: p/default
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Push event — no-op for required-workflow check
+        if: github.event_name == 'push'
+        run: |
+          echo "Push su '${GITHUB_REF#refs/heads/}': l'analisi parte sulla PR."
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use trusted .semgrepignore
+        if: github.event_name == 'pull_request'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          rm -f .semgrepignore
+          if git cat-file -e "origin/${DEFAULT_BRANCH}:.semgrepignore" 2>/dev/null; then
+            git show "origin/${DEFAULT_BRANCH}:.semgrepignore" > .semgrepignore
+          fi
+          # Il file non è tracciato nella PR: lo tolgo da git status, altrimenti
+          # la baseline di Semgrep rifiuta un working tree "sporco".
+          echo ".semgrepignore" >> .git/info/exclude
+
+      - name: Scan new findings
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sast"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" -v "$RUNNER_TEMP/sast:/out" -w /src \
+            -e BASE_SHA -e SEMGREP_RULES \
+            "$SEMGREP_IMAGE" sh -c '
+              git config --global --add safe.directory /src
+              semgrep scan --config "$SEMGREP_RULES" --metrics off \
+                --baseline-commit "$BASE_SHA" \
+                --json-output=/out/semgrep.json --sarif-output=/out/semgrep.sarif \
+                --quiet >/dev/null'
+
+      - name: Summary and gate
+        if: github.event_name == 'pull_request'
+        run: |
+          f="$RUNNER_TEMP/sast/semgrep.json"
+          errors=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' "$f")
+          total=$(jq '.results | length' "$f")
+          {
+            echo "## SAST (Semgrep, \`${SEMGREP_RULES}\`)"
+            echo
+            echo "Rilievi nuovi della PR: **${total}**, di cui **${errors}** con severità ERROR (bloccanti)."
+            if [ "$total" -gt 0 ]; then
+              echo
+              echo "| Severità | Regola | File | Riga |"
+              echo "|---|---|---|---|"
+              jq -r '.results | sort_by(.extra.severity) | .[] | "| \(.extra.severity) | `\(.check_id | split(".") | last)` | `\(.path)` | \(.start.line) |"' "$f"
+              echo
+              echo "Dettaglio e regole complete nell'artifact \`sast-report\` del run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.results[] | "::\(if .extra.severity=="ERROR" then "error" else "warning" end) file=\(.path),line=\(.start.line)::\(.check_id): \(.extra.message | gsub("\n"; " ") | .[0:300])"' "$f"
+          [ "$errors" -eq 0 ]
+
+      - name: Upload report
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sast-report
+          path: ${{ runner.temp }}/sast/
+          retention-days: 90
+          if-no-files-found: ignore
