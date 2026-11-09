@@ -1,0 +1,22 @@
+# Configurazione gitleaks di organizzazione (ONE-1175): regole predefinite
+# più una regola per le credenziali scritte in chiaro nei file di
+# configurazione e nei template di deploy (es. DB_PASSWORD: "..."), che le
+# regole predefinite non riconoscono quando il valore ha poca entropia.
+#
+# Usata da secret-scan.yml (check sulle PR) e da org-config/security-scan.yml
+# (scansione settimanale). Un repo può sostituirla con un proprio
+# .gitleaks.toml sul branch di default, che dovrebbe a sua volta estendere
+# questa ([extend] con le regole predefinite + le stesse regole).
+[extend]
+useDefault = true
+
+[[rules]]
+id = "org-config-credential"
+description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *_SECRET di un file di configurazione"
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*["']?([^\s"'$\{\}<>()]{8,})["']?[ \t]*(?:#.*)?$'''
+path = '''(?i)(\.(ya?ml|properties|toml|tfvars|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
+secretGroup = 1
+entropy = 2.5
+keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
+[rules.allowlist]
+regexes = ['''(?i)(changeme|example|placeholder|your[_-]|xxx|dummy|redacted|\*\*\*|^arn:|^/|resolve:|secretsmanager|ssm:)''']
