@@ -56,18 +56,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Semgrep legge anche i .semgrepignore nelle sottocartelle: quelli della
+      # PR spariscono tutti e tornano solo quelli del branch di default, alla
+      # stessa profondità. Le differenze restano invisibili a git (skip-worktree
+      # per i file tracciati, .git/info/exclude per quelli nuovi), perché
+      # --baseline-commit rifiuta un working tree con modifiche.
       - name: Use trusted .semgrepignore
         if: github.event_name == 'pull_request'
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          rm -f .semgrepignore
-          if git cat-file -e "origin/${DEFAULT_BRANCH}:.semgrepignore" 2>/dev/null; then
-            git show "origin/${DEFAULT_BRANCH}:.semgrepignore" > .semgrepignore
+          ref="origin/${DEFAULT_BRANCH}"
+          git ls-files -z -- ':(glob)**/.semgrepignore' \
+            | xargs -0 -r git update-index --skip-worktree --
+          find . -path ./.git -prune -o -type f -name .semgrepignore -exec rm -f -- {} +
+          git ls-tree -r -z --name-only "$ref" | grep -z -E '(^|/)\.semgrepignore$' \
+            | while IFS= read -r -d '' p; do
+                mkdir -p "$(dirname "$p")"
+                git show "${ref}:${p}" > "$p"
+                git ls-files --error-unmatch -- "$p" >/dev/null 2>&1 \
+                  || echo "/${p}" >> .git/info/exclude
+              done
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            echo "::error::Working tree non pulito dopo la sostituzione dei .semgrepignore."
+            exit 1
           fi
-          # Il file non è tracciato nella PR: lo tolgo da git status, altrimenti
-          # la baseline di Semgrep rifiuta un working tree "sporco".
-          echo ".semgrepignore" >> .git/info/exclude
 
       - name: Scan new findings
         if: github.event_name == 'pull_request'

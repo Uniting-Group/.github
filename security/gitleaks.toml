@@ -13,10 +13,23 @@ useDefault = true
 [[rules]]
 id = "org-config-credential"
 description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *_SECRET di un file di configurazione"
-regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*["']?([^\s"'$\{\}<>()]{8,})["']?[ \t]*(?:#.*)?$'''
-path = '''(?i)(\.(ya?ml|properties|toml|tfvars|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
+# Il valore può essere tra virgolette (doppie o singole, caratteri speciali
+# compresi) o senza virgolette. Le virgolette fanno parte del segreto catturato:
+# per questo le esclusioni ammettono una virgoletta iniziale. Nessuna soglia di
+# entropia: le password deboli sono proprio il caso da trovare; i falsi
+# positivi si gestiscono con le esclusioni qui sotto o in .gitleaksignore.
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#]{8,})[ \t]*(?:#.*)?$'''
+path = '''(?i)(\.(ya?ml|properties|toml|tfvars|tf|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
 secretGroup = 1
-entropy = 2.5
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
 [rules.allowlist]
-regexes = ['''(?i)(changeme|example|placeholder|your[_-]|xxx|dummy|redacted|\*\*\*|^arn:|^/|resolve:|secretsmanager|ssm:)''']
+regexes = [
+  # Segnaposto, solo se sono l'intero valore (anche prefisso + xxx, es. napi_xxxx).
+  '''(?i)^["']?(changeme|change[_-]me|example|placeholder|dummy|redacted|[a-z0-9_-]*x{3,}|\*{3,}|<[^<>]+>|your[_-][a-z0-9_-]+)["']?$''',
+  # Riferimenti: variabili d'ambiente e di template, CloudFormation, Secrets Manager, SSM, ARN.
+  '''^["']?(\$\{|\$\(|\$[A-Za-z_]|\{\{|%\(|arn:aws|resolve:|secretsmanager:|ssm:)''',
+  # Riferimenti Terraform senza virgolette (in HCL un letterale è sempre tra virgolette).
+  '''^(var|local|module|data|each|random_[a-z0-9_]+|aws_[a-z0-9_]+)\.''',
+  # Percorso di un parametro o di un file montato: almeno due segmenti, solo caratteri da percorso.
+  '''^["']?/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+["']?$''',
+]
