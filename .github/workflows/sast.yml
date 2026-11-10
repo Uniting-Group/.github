@@ -120,10 +120,19 @@ jobs:
           f="$RUNNER_TEMP/sast/semgrep.json"
           errors=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' "$f")
           total=$(jq '.results | length' "$f")
+          # Errori che lasciano file non analizzati anche con uscita a zero:
+          # errori fatali, timeout e memoria esaurita su una regola. Il parsing
+          # parziale (PartialParsing, livello warn) è normale e non blocca.
+          incomplete_q='[.errors[] | select(.level == "error" or ((.type | if type == "array" then .[0] else . end) | IN("Timeout", "OutOfMemory")))]'
+          incomplete=$(jq "${incomplete_q} | length" "$f")
           {
             echo "## SAST (Semgrep, \`${SEMGREP_RULES}\`)"
             echo
             echo "Rilievi nuovi della PR: **${total}**, di cui **${errors}** con severità ERROR (bloccanti)."
+            if [ "$incomplete" -gt 0 ]; then
+              echo
+              echo "**Scansione incompleta:** ${incomplete} errori di Semgrep (fatali, timeout o memoria). Il check resta rosso finché la PR non è analizzata per intero."
+            fi
             if [ "$total" -gt 0 ]; then
               echo
               echo "| Severità | Regola | File | Riga |"
@@ -134,7 +143,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '.results[] | "::\(if .extra.severity=="ERROR" then "error" else "warning" end) file=\(.path),line=\(.start.line)::\(.check_id): \(.extra.message | gsub("\n"; " ") | .[0:300])"' "$f"
-          [ "$errors" -eq 0 ]
+          jq -r "${incomplete_q}"' | .[] | "::error file=\(.path // "")::Semgrep: \(.type | if type == "array" then .[0] else . end) — \(.message | gsub("\n"; " ") | .[0:300])"' "$f"
+          [ "$errors" -eq 0 ] && [ "$incomplete" -eq 0 ]
 
       - name: Upload report
         if: always() && github.event_name == 'pull_request'
