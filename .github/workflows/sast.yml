@@ -69,7 +69,8 @@ jobs:
           ref="origin/${DEFAULT_BRANCH}"
           git ls-files -z -- ':(glob)**/.semgrepignore' \
             | xargs -0 -r git update-index --skip-worktree --
-          find . -path ./.git -prune -o -type f -name .semgrepignore -exec rm -f -- {} +
+          # ! -type d: anche i symlink, che Semgrep seguirebbe.
+          find . -path ./.git -prune -o -name .semgrepignore ! -type d -exec rm -f -- {} +
           git ls-tree -r -z --name-only "$ref" | grep -z -E '(^|/)\.semgrepignore$' \
             | while IFS= read -r -d '' p; do
                 mkdir -p "$(dirname "$p")"

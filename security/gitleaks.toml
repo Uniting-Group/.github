@@ -14,11 +14,12 @@ useDefault = true
 id = "org-config-credential"
 description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *_SECRET di un file di configurazione"
 # Il valore può essere tra virgolette (doppie o singole, caratteri speciali
-# compresi) o senza virgolette. Le virgolette fanno parte del segreto catturato:
-# per questo le esclusioni ammettono una virgoletta iniziale. Nessuna soglia di
-# entropia: le password deboli sono proprio il caso da trovare; i falsi
-# positivi si gestiscono con le esclusioni qui sotto o in .gitleaksignore.
-regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#]{8,})[ \t]*(?:#.*)?$'''
+# compresi) o senza virgolette, seguito al più da una virgola (JSON). Le
+# virgolette fanno parte del segreto catturato: per questo le esclusioni
+# ammettono una virgoletta iniziale. Nessuna soglia di entropia: le password
+# deboli sono proprio il caso da trovare; i falsi positivi si gestiscono con le
+# esclusioni qui sotto o in .gitleaksignore.
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#]{8,})[ \t]*,?[ \t]*(?:#.*)?$'''
 path = '''(?i)(\.(ya?ml|properties|toml|tfvars|tf|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
 secretGroup = 1
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
