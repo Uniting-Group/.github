@@ -15,25 +15,28 @@ id = "org-config-credential"
 description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *_SECRET di un file di configurazione"
 # Il valore può essere tra virgolette (doppie o singole, caratteri speciali
 # compresi) o senza virgolette. Dopo il valore sono ammessi la virgoletta di
-# chiusura di una stringa ("KEY=valore" in una lista) e, da una virgola, una
-# parentesi di chiusura o un # in poi, il resto della riga: altri campi del JSON
-# compatto su una riga, commenti. Le virgolette fanno parte del
-# segreto catturato: per questo le esclusioni ammettono una virgoletta
-# iniziale. Nessuna soglia di entropia: le password deboli sono proprio il caso
+# chiusura di una stringa ("KEY=valore" in una lista) e poi la fine della riga
+# oppure una virgola, una parentesi di chiusura o un #. Il resto della riga non
+# entra nella corrispondenza: nel JSON compatto su una riga ogni proprietà è
+# controllata da sola, e un segnaposto escluso non nasconde il segreto che lo
+# segue. gitleaks riapplica la regola alla sola corrispondenza, quindi un valore
+# senza virgolette può includere il terminatore (changeme,): le esclusioni lo
+# ammettono in coda. Le virgolette fanno parte del segreto catturato: per questo
+# le esclusioni ammettono una virgoletta iniziale. Nessuna soglia di entropia: le password deboli sono proprio il caso
 # da trovare; i falsi positivi si gestiscono con le esclusioni qui sotto o in
 # .gitleaksignore.
-regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#]{8,})["']?[ \t]*(?:[,\]}#].*)?$'''
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#]{8,})["']?[ \t]*(?:[,\]}#]|$)'''
 path = '''(?i)(\.(ya?ml|properties|toml|tfvars|tf|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
 secretGroup = 1
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
 [rules.allowlist]
 regexes = [
   # Segnaposto, solo se sono l'intero valore (anche prefisso + xxx, es. napi_xxxx).
-  '''(?i)^["']?(changeme|change[_-]me|example|placeholder|dummy|redacted|[a-z0-9_-]*x{3,}|\*{3,}|<[^<>]+>|your[_-][a-z0-9_-]+)["']?$''',
+  '''(?i)^["']?(changeme|change[_-]me|example|placeholder|dummy|redacted|[a-z0-9_-]*x{3,}|\*{3,}|<[^<>]+>|your[_-][a-z0-9_-]+)["']?[,\]}]?$''',
   # Riferimenti: variabili d'ambiente e di template, CloudFormation, Secrets Manager, SSM, ARN.
   '''^["']?(\$\{|\$\(|\$[A-Za-z_]|\{\{|%\(|arn:aws|resolve:|secretsmanager:|ssm:)''',
   # Riferimenti Terraform senza virgolette (in HCL un letterale è sempre tra virgolette).
   '''^(var|local|module|data|each|random_[a-z0-9_]+|aws_[a-z0-9_]+)\.''',
   # Percorso di un parametro o di un file montato: almeno due segmenti, solo caratteri da percorso.
-  '''^["']?/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+["']?$''',
+  '''^["']?/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+["']?[,\]}]?$''',
 ]
