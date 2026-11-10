@@ -71,13 +71,27 @@ jobs:
             | xargs -0 -r git update-index --skip-worktree --
           # ! -type d: anche i symlink, che Semgrep seguirebbe.
           find . -path ./.git -prune -o -name .semgrepignore ! -type d -exec rm -f -- {} +
-          git ls-tree -r -z --name-only "$ref" | grep -z -E '(^|/)\.semgrepignore$' \
-            | while IFS= read -r -d '' p; do
-                mkdir -p "$(dirname "$p")"
-                git show "${ref}:${p}" > "$p"
-                git ls-files --error-unmatch -- "$p" >/dev/null 2>&1 \
-                  || echo "/${p}" >> .git/info/exclude
-              done
+          git ls-tree -r -z "$ref" | while IFS= read -r -d '' entry; do
+              p=${entry#*$'\t'}; mode=${entry%% *}
+              case "$p" in .semgrepignore|*/.semgrepignore) ;; *) continue ;; esac
+              src="$p"
+              if [ "$mode" = 120000 ]; then
+                # Symlink nel branch di default: si usa il file a cui punta,
+                # cercato nel tree dello stesso branch (mai nel working tree
+                # della PR) e solo dentro il repository.
+                t=$(git show "${ref}:${p}")
+                case "$t" in /*) echo "::error::${p}: symlink con percorso assoluto."; exit 1 ;; esac
+                src=$(realpath -m -s --relative-to=/r "/r/$(dirname "$p")/${t}")
+                case "$src" in ..|../*) echo "::error::${p}: il symlink punta fuori dal repository."; exit 1 ;; esac
+                if ! git ls-tree "$ref" -- "$src" | grep -q '^100'; then
+                  echo "::error::${p}: il symlink non punta a un file del branch di default."; exit 1
+                fi
+              fi
+              mkdir -p "$(dirname "$p")"
+              git show "${ref}:${src}" > "$p"
+              git ls-files --error-unmatch -- "$p" >/dev/null 2>&1 \
+                || echo "/${p}" >> .git/info/exclude
+            done
           if [ -n "$(git status --porcelain)" ]; then
             git status --porcelain
             echo "::error::Working tree non pulito dopo la sostituzione dei .semgrepignore."
