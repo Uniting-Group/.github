@@ -26,7 +26,7 @@ description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *
 # Nessuna soglia di entropia: le password deboli sono proprio il caso
 # da trovare; i falsi positivi si gestiscono con le esclusioni qui sotto o in
 # .gitleaksignore.
-regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#,\]}]{8,})["']?[ \t]*(?:[,\]}#]|$)'''
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'#,\]}]{8,})["']?[ \t]*(?:[,\]}#]|\r?$)'''
 path = '''(?i)(\.(ya?ml|properties|toml|tfvars|tf|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
 secretGroup = 1
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
