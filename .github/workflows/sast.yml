@@ -87,6 +87,13 @@ jobs:
                   echo "::error::${p}: il symlink non punta a un file del branch di default."; exit 1
                 fi
               fi
+              # Nessun antenato nel working tree della PR può essere un symlink:
+              # la scrittura finirebbe su un altro .semgrepignore.
+              d=$(dirname "$p")
+              while [ "$d" != . ]; do
+                if [ -L "$d" ]; then echo "::error::${p}: ${d} è un symlink nella PR."; exit 1; fi
+                d=$(dirname "$d")
+              done
               mkdir -p "$(dirname "$p")"
               git show "${ref}:${src}" > "$p"
               git ls-files --error-unmatch -- "$p" >/dev/null 2>&1 \
