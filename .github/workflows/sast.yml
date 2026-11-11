@@ -1,0 +1,165 @@
+name: SAST
+
+# Analisi statica del codice con Semgrep CE sulle PR (ONE-1175).
+#
+# Distribuito come Required Workflow tramite Org Ruleset, come secret-scan.yml:
+# nessun file da aggiungere ai repo. Scelta degli strumenti e soglie
+# nell'ADR org-project/adr/0001-analisi-del-codice.md.
+#
+# Cosa blocca: solo i rilievi NUOVI della PR (baseline = base della PR) con
+# severità ERROR. I WARNING e i rilievi già presenti sul branch di default
+# compaiono nel riepilogo ma non bloccano: li gestisce la scansione settimanale
+# centralizzata (org-config, security-scan.yml), che riporta tutto il branch di
+# default e da cui si aprono i ticket per i rilievi high.
+#
+# Falso positivo: commento `nosemgrep: <rule-id>` con la motivazione sulla
+# stessa riga o su quella sopra. È visibile nel diff, quindi passa dalla review.
+# `.semgrepignore` invece si legge dal branch di default, non dalla PR.
+#
+# Il push su un branch è un no-op: serve solo a dare al Ruleset un run verde
+# per ogni SHA (vedi pr-autofill.yml). L'analisi vera parte sulla PR.
+#
+# Semgrep gira nell'immagine ufficiale pinnata per digest; le regole sono il
+# set pubblico `p/default` del registry Semgrep (scaricate senza login e senza
+# metriche). Il codice non lascia il runner.
+
+on:
+  workflow_call:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  # semgrep/semgrep:1.182.0
+  SEMGREP_IMAGE: semgrep/semgrep@sha256:4a34048c04fef049f71665047f074cffb00cc3d89482f965a5cd151d589237af
+  SEMGREP_RULES: p/default
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Push event — no-op for required-workflow check
+        if: github.event_name == 'push'
+        run: |
+          echo "Push su '${GITHUB_REF#refs/heads/}': l'analisi parte sulla PR."
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Semgrep legge anche i .semgrepignore nelle sottocartelle: quelli della
+      # PR spariscono tutti e tornano solo quelli del branch di default, alla
+      # stessa profondità. Le differenze restano invisibili a git (skip-worktree
+      # per i file tracciati, .git/info/exclude per quelli nuovi), perché
+      # --baseline-commit rifiuta un working tree con modifiche.
+      - name: Use trusted .semgrepignore
+        if: github.event_name == 'pull_request'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ref="origin/${DEFAULT_BRANCH}"
+          git ls-files -z -- ':(glob)**/.semgrepignore' \
+            | xargs -0 -r git update-index --skip-worktree --
+          # ! -type d: anche i symlink, che Semgrep seguirebbe.
+          find . -path ./.git -prune -o -name .semgrepignore ! -type d -exec rm -f -- {} +
+          git ls-tree -r -z "$ref" | while IFS= read -r -d '' entry; do
+              p=${entry#*$'\t'}; mode=${entry%% *}
+              case "$p" in .semgrepignore|*/.semgrepignore) ;; *) continue ;; esac
+              src="$p"
+              if [ "$mode" = 120000 ]; then
+                # Symlink nel branch di default: si usa il file a cui punta,
+                # cercato nel tree dello stesso branch (mai nel working tree
+                # della PR) e solo dentro il repository.
+                t=$(git show "${ref}:${p}")
+                case "$t" in /*) echo "::error::${p}: symlink con percorso assoluto."; exit 1 ;; esac
+                src=$(realpath -m -s --relative-to=/r "/r/$(dirname "$p")/${t}")
+                case "$src" in ..|../*) echo "::error::${p}: il symlink punta fuori dal repository."; exit 1 ;; esac
+                if ! git ls-tree "$ref" -- "$src" | grep -q '^100'; then
+                  echo "::error::${p}: il symlink non punta a un file del branch di default."; exit 1
+                fi
+              fi
+              # Nessun antenato nel working tree della PR può essere un symlink:
+              # la scrittura finirebbe su un altro .semgrepignore.
+              d=$(dirname "$p")
+              while [ "$d" != . ]; do
+                if [ -L "$d" ]; then echo "::error::${p}: ${d} è un symlink nella PR."; exit 1; fi
+                d=$(dirname "$d")
+              done
+              mkdir -p "$(dirname "$p")"
+              git show "${ref}:${src}" > "$p"
+              git ls-files --error-unmatch -- "$p" >/dev/null 2>&1 \
+                || echo "/${p}" >> .git/info/exclude
+            done
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            echo "::error::Working tree non pulito dopo la sostituzione dei .semgrepignore."
+            exit 1
+          fi
+
+      - name: Scan new findings
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sast"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" -v "$RUNNER_TEMP/sast:/out" -w /src \
+            -e BASE_SHA -e SEMGREP_RULES \
+            "$SEMGREP_IMAGE" sh -c '
+              git config --global --add safe.directory /src
+              semgrep scan --config "$SEMGREP_RULES" --metrics off \
+                --baseline-commit "$BASE_SHA" \
+                --json-output=/out/semgrep.json --sarif-output=/out/semgrep.sarif \
+                --quiet >/dev/null'
+
+      - name: Summary and gate
+        if: github.event_name == 'pull_request'
+        run: |
+          f="$RUNNER_TEMP/sast/semgrep.json"
+          errors=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' "$f")
+          total=$(jq '.results | length' "$f")
+          # Errori che lasciano file non analizzati anche con uscita a zero:
+          # errori fatali (livello error) e, tra gli avvisi, timeout, memoria
+          # esaurita e stack overflow (nomi JSON di Semgrep 1.182.0). Il parsing
+          # parziale e il "Fixpoint timeout" (analisi approssimata, file comunque
+          # analizzato) non bloccano.
+          incomplete_q='[.errors[] | select(.level == "error" or ((.type | if type == "array" then .[0] else . end) | IN("Timeout", "Out of memory", "Stack overflow", "Timeout during interfile analysis", "OOM during interfile analysis")))]'
+          incomplete=$(jq "${incomplete_q} | length" "$f")
+          {
+            echo "## SAST (Semgrep, \`${SEMGREP_RULES}\`)"
+            echo
+            echo "Rilievi nuovi della PR: **${total}**, di cui **${errors}** con severità ERROR (bloccanti)."
+            if [ "$incomplete" -gt 0 ]; then
+              echo
+              echo "**Scansione incompleta:** ${incomplete} errori di Semgrep (fatali, timeout o memoria). Il check resta rosso finché la PR non è analizzata per intero."
+            fi
+            if [ "$total" -gt 0 ]; then
+              echo
+              echo "| Severità | Regola | File | Riga |"
+              echo "|---|---|---|---|"
+              jq -r '.results | sort_by(.extra.severity) | .[] | "| \(.extra.severity) | `\(.check_id | split(".") | last)` | `\(.path)` | \(.start.line) |"' "$f"
+              echo
+              echo "Dettaglio e regole complete nell'artifact \`sast-report\` del run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.results[] | "::\(if .extra.severity=="ERROR" then "error" else "warning" end) file=\(.path),line=\(.start.line)::\(.check_id): \(.extra.message | gsub("\n"; " ") | .[0:300])"' "$f"
+          jq -r "${incomplete_q}"' | .[] | "::error file=\(.path // "")::Semgrep: \(.type | if type == "array" then .[0] else . end) — \(.message | gsub("\n"; " ") | .[0:300])"' "$f"
+          [ "$errors" -eq 0 ] && [ "$incomplete" -eq 0 ]
+
+      - name: Upload report
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sast-report
+          path: ${{ runner.temp }}/sast/
+          retention-days: 90
+          if-no-files-found: ignore
