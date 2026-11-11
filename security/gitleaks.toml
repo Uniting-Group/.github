@@ -57,12 +57,16 @@ description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *
 # gli otto caratteri minimi sono quelli del valore ricostruito. Una
 # continuazione seguita da una riga vuota, o una \ a fine file, chiude il
 # valore senza aggiungervi niente.
-# Il formato ammette anche lo spazio come separatore (CHIAVE valore): la
-# seconda alternativa lo riconosce solo se la chiave apre la riga, perché in
-# un commento (# o !) o dentro un valore lo stesso testo non è una chiave, e
-# solo se il valore non comincia con : o =, che sarebbero il separatore.
+# La chiave deve aprire la riga, anche con un prefisso puntato (app.db.KEY):
+# in un commento (# o !) o dentro il valore di un'altra chiave lo stesso testo
+# non è una chiave. I separatori sono =, : oppure lo spazio (CHIAVE valore);
+# con lo spazio il valore non può cominciare con : o =, che sarebbero il
+# separatore. Una continuazione può stare anche tra chiave, separatore e
+# valore: resta fuori dal valore catturato, così le esclusioni vedono il
+# valore dal suo primo carattere. Gli spazi a fine riga non contano tra gli
+# otto caratteri e restano fuori dal valore.
 # Senza secretGroup il segreto è il gruppo, tra i due, che ha trovato il valore.
-regex = '''(?m)(?:\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]*[:=][ \t]*((?:\\\r?\n[ \t]*)*(?:[^\s\\]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){7,}?)|^[ \t]*[^\s:=#!]*\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]+((?:\\\r?\n[ \t]*)*(?:[^\s\\:=]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){7,}?))[ \t]*(?:\\\r?\n[ \t]*)*(?:\\\z)?\r?$'''
+regex = '''(?m)^[ \t]*[^\s:=#!]*\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)(?:[ \t]*(?:\\\r?\n[ \t]*)*[:=][ \t]*(?:\\\r?\n[ \t]*)*((?:[^\s\\]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){6,}?(?:\\\r?\n[ \t]*)*(?:[^\s\\]|\\[^\r\n]))|[ \t]+(?:\\\r?\n[ \t]*)*((?:[^\s\\:=]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){6,}?(?:\\\r?\n[ \t]*)*(?:[^\s\\]|\\[^\r\n])))[ \t]*(?:\\\r?\n[ \t]*)*(?:\\\z)?\r?$'''
 path = '''(?i)\.properties$'''
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
 # Stesse esclusioni della regola precedente.
