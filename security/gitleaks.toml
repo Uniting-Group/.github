@@ -51,8 +51,10 @@ description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *
 # Nei .properties il valore arriva fino alla fine della riga: virgole,
 # parentesi e # ne fanno parte, anche all'inizio. Il formato non ha commenti a
 # fine riga (un # apre un commento solo a inizio riga), quindi un # dopo il
-# valore appartiene al valore.
-regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]*[:=][ \t]*(\S[^\r\n]{7,}?)[ \t]*\r?$'''
+# valore appartiene al valore. Come nel formato, una \ a fine riga continua il
+# valore sulla riga dopo (senza i suoi spazi iniziali); \\ invece è una barra
+# letterale e non continua niente.
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]*[:=][ \t]*((?:[^\s\\]|\\\r?\n[ \t]*|\\[^\r\n])(?:[^\r\n\\]|\\\r?\n[ \t]*|\\[^\r\n]){7,}?)[ \t]*\r?$'''
 path = '''(?i)\.properties$'''
 secretGroup = 1
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
