@@ -1,7 +1,9 @@
 # Configurazione gitleaks di organizzazione (ONE-1175): regole predefinite
-# più una regola per le credenziali scritte in chiaro nei file di
+# più due regole per le credenziali scritte in chiaro nei file di
 # configurazione e nei template di deploy (es. DB_PASSWORD: "..."), che le
-# regole predefinite non riconoscono quando il valore ha poca entropia.
+# regole predefinite non riconoscono quando il valore ha poca entropia: una
+# per i file .properties, dove il valore arriva a fine riga, e una per gli
+# altri formati.
 #
 # Usata da secret-scan.yml (check sulle PR) e da org-config/security-scan.yml
 # (scansione settimanale). Un repo può sostituirla con un proprio
@@ -28,9 +30,32 @@ description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *
 # da trovare; i falsi positivi si gestiscono con le esclusioni qui sotto o in
 # .gitleaksignore.
 regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*("(?:[^"\\\r\n]|\\.){8,}"|'(?:[^'\\\r\n]|\\.){8,}'|[^\s"'#,\]}]{8,})["']?[ \t]*(?:[,\]}#]|\r?$)'''
-path = '''(?i)(\.(ya?ml|properties|toml|tfvars|tf|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
+path = '''(?i)(\.(ya?ml|toml|tfvars|tf|ini|conf|cfg)|(^|/)\.env(\.[a-z0-9_-]+)?|template\.json)$'''
 secretGroup = 1
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
+[rules.allowlist]
+regexes = [
+  # Segnaposto, solo se sono l'intero valore (anche prefisso + xxx, es. napi_xxxx).
+  '''(?i)^["']?(changeme|change[_-]me|example|placeholder|dummy|redacted|[a-z0-9_-]*x{3,}|\*{3,}|<[^<>]+>|your[_-][a-z0-9_-]+)["']?$''',
+  # Riferimenti: variabili d'ambiente e di template, CloudFormation, Secrets Manager, SSM, ARN.
+  '''^["']?(\$\{|\$\(|\$[A-Za-z_]|\{\{|%\(|arn:aws|resolve:|secretsmanager:|ssm:)''',
+  # Riferimenti Terraform senza virgolette (in HCL un letterale è sempre tra virgolette).
+  '''^(var|local|module|data|each|random_[a-z0-9_]+|aws_[a-z0-9_]+)\.''',
+  # Percorso di un parametro o di un file montato: almeno due segmenti, solo caratteri da percorso.
+  '''^["']?/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+["']?$''',
+]
+
+[[rules]]
+id = "org-config-credential-properties"
+description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *_SECRET di un file .properties"
+# Nei .properties il valore arriva fino alla fine della riga: virgole,
+# parentesi e # in mezzo al valore ne fanno parte. Un # preceduto da spazi
+# resta fuori dal segreto, come un commento a fine riga.
+regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]*[:=][ \t]*([^\s#][^\r\n]{7,}?)[ \t]*(?:[ \t]#[^\r\n]*)?\r?$'''
+path = '''(?i)\.properties$'''
+secretGroup = 1
+keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
+# Stesse esclusioni della regola precedente.
 [rules.allowlist]
 regexes = [
   # Segnaposto, solo se sono l'intero valore (anche prefisso + xxx, es. napi_xxxx).
