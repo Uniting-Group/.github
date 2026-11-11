@@ -57,9 +57,13 @@ description = "Credenziale in chiaro in una variabile *_PASSWORD / *_AUTHKEY / *
 # gli otto caratteri minimi sono quelli del valore ricostruito. Una
 # continuazione seguita da una riga vuota, o una \ a fine file, chiude il
 # valore senza aggiungervi niente.
-regex = '''(?m)\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]*[:=][ \t]*((?:\\\r?\n[ \t]*)*(?:[^\s\\]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){7,}?)[ \t]*(?:\\\r?\n[ \t]*)*(?:\\\z)?\r?$'''
+# Il formato ammette anche lo spazio come separatore (CHIAVE valore): la
+# seconda alternativa lo riconosce solo se la chiave apre la riga, perché in
+# un commento (# o !) o dentro un valore lo stesso testo non è una chiave, e
+# solo se il valore non comincia con : o =, che sarebbero il separatore.
+# Senza secretGroup il segreto è il gruppo, tra i due, che ha trovato il valore.
+regex = '''(?m)(?:\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]*[:=][ \t]*((?:\\\r?\n[ \t]*)*(?:[^\s\\]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){7,}?)|^[ \t]*[^\s:=#!]*\b[A-Z][A-Z0-9_]*_(?:PASSWORD|PASSWD|AUTHKEY|AUTH_KEY|SECRET|SECRET_KEY|API_KEY|TOKEN)[ \t]+((?:\\\r?\n[ \t]*)*(?:[^\s\\:=]|\\[^\r\n])(?:(?:\\\r?\n[ \t]*)+(?:[^\s\\]|\\[^\r\n])|[^\r\n\\]|\\[^\r\n]){7,}?))[ \t]*(?:\\\r?\n[ \t]*)*(?:\\\z)?\r?$'''
 path = '''(?i)\.properties$'''
-secretGroup = 1
 keywords = ["password", "passwd", "authkey", "auth_key", "secret", "api_key", "token"]
 # Stesse esclusioni della regola precedente.
 [rules.allowlist]
