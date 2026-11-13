@@ -32,8 +32,9 @@ name: Promozione
 # GITHUB_TOKEN del repo. Titoli e nomi di branch arrivano dalle API come dati
 # e non entrano mai in un comando di shell.
 #
-# Eventi: sotto il Ruleset partono solo opened, synchronize e reopened
-# (verificato il 13/11/2026: `closed` ed `edited` non avviano il workflow).
+# Eventi: sotto il Ruleset partono solo opened, synchronize e reopened.
+# `closed` non avvia il workflow (provato il 13/11/2026 su org-sandbox);
+# per `edited` vale quanto rilevato in pr-autofill.yml.
 # Per questo il promemoria dell'hotfix si scrive all'apertura e non al merge,
 # e una PR la cui base viene spostata su `main` si controlla al push
 # successivo. `edited` resta tra i tipi per chi richiama il workflow dal repo.
