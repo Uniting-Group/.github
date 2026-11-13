@@ -1,0 +1,208 @@
+name: Promozione
+
+# Controllo delle PR verso il branch di produzione nei repo a due branch
+# (ONE-1246, flusso a trunk unico della GIT-WORKFLOW v2).
+#
+# Nei repo con ambiente di staging il trunk è il branch di default (`staging`)
+# e `main` è il branch di produzione: lo aggiornano solo la PR di rilascio,
+# che porta su `main` ciò che è già nel trunk, e gli hotfix. Questo workflow:
+#
+#   1. verifica da dove arriva la PR verso `main`:
+#        - dal trunk, o da un branch `release/*` fatto solo di commit già
+#          presenti nel trunk  → PR di rilascio;
+#        - da un branch `hotfix/*`                         → hotfix;
+#        - da qualunque altro branch                       → rifiutata;
+#   2. sulla PR di rilascio scrive nel corpo l'elenco delle PR incluse, con i
+#      task, tra i marker `promozione:rilascio`: chi approva autorizza il
+#      rilascio di quell'elenco, non rilegge il codice;
+#   3. quando un hotfix viene unito, lascia un commento con i comandi per
+#      riportare la correzione nel trunk.
+#
+# Distribuito come Required Workflow tramite un Org Ruleset sul branch `main`
+# dei repo passati al modello: nessun file da aggiungere ai repo. Dove il
+# branch di default è `main` (repo senza staging, o non ancora passati) il
+# job termina subito con esito positivo.
+#
+# Il metodo di merge (merge commit su `main`) non si controlla qui: lo impone
+# il ruleset di repository generato da org-config (ONE-1245).
+#
+# Fiducia: sotto il Ruleset il workflow arriva da Uniting-Group/.github@main,
+# quindi una PR non può toglierlo o ammorbidirlo. Il job non fa il checkout e
+# non esegue codice del repo: legge e scrive solo tramite le API, con il
+# GITHUB_TOKEN del repo. Titoli e nomi di branch arrivano dalle API come dati
+# e non entrano mai in un comando di shell.
+#
+# Limiti noti:
+#   - il corpo si aggiorna a ogni evento della PR (apertura, nuovo commit sul
+#     branch di origine, riapertura), non quando cambia un task su Jira;
+#   - una PR creata da un workflow con il GITHUB_TOKEN non fa partire i
+#     workflow: la PR di rilascio la apre una persona (o una App);
+#   - oltre i 250 commit l'API non elenca il resto: l'elenco lo dichiara.
+
+on:
+  workflow_call:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, closed]
+
+permissions:
+  pull-requests: write
+  issues: write    # i commenti sulla PR passano dalle API delle issue
+  contents: read
+
+jobs:
+  promozione:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Controllo della PR verso il branch di produzione
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) { core.notice('Nessuna PR nel contesto: niente da controllare.'); return; }
+            const { owner, repo } = context.repo;
+            const PROD = 'main';
+            const trunk = context.payload.repository.default_branch;
+            const base = pr.base.ref;
+            const head = pr.head.ref;
+            const action = context.payload.action;
+
+            // Fuori dal modello a due branch, o PR non verso la produzione.
+            if (trunk === PROD) {
+              core.notice(`Il branch di default è ${PROD}: repo non a due branch, controllo non applicabile.`);
+              return;
+            }
+            if (base !== PROD) {
+              core.notice(`PR verso ${base}: il controllo vale solo verso ${PROD}.`);
+              return;
+            }
+            // `edited` interessa solo se è cambiata la base.
+            if (action === 'edited' && !context.payload.changes?.base) {
+              core.notice('Modifica di titolo o corpo: niente da ricontrollare.');
+              return;
+            }
+            if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
+              core.setFailed(`Verso ${PROD} sono ammesse solo PR da branch di questo repository.`);
+              return;
+            }
+
+            // 1. Da dove arriva la PR.
+            let kind;
+            if (head === trunk || head.startsWith('release/')) kind = 'rilascio';
+            else if (head.startsWith('hotfix/')) kind = 'hotfix';
+            else {
+              core.setFailed(
+                `Verso ${PROD} sono ammesse solo la PR di rilascio (da ${trunk} o da un branch release/*) ` +
+                `e gli hotfix (da un branch hotfix/*). Questa PR arriva da "${head}": ` +
+                `il lavoro ordinario si apre verso ${trunk}.`);
+              return;
+            }
+
+            // Hotfix unito: promemoria per riportare la correzione nel trunk.
+            if (action === 'closed') {
+              if (kind === 'hotfix' && pr.merged) {
+                const marker = '<!-- promozione:ritorno-hotfix -->';
+                const comments = await github.paginate(github.rest.issues.listComments,
+                  { owner, repo, issue_number: pr.number, per_page: 100 });
+                if (!comments.some(c => (c.body || '').includes(marker))) {
+                  const jira = (pr.title.match(/[A-Z][A-Z0-9]+-\d+/) || head.match(/[A-Z][A-Z0-9]+-\d+/) || ['ID-XXXX'])[0];
+                  const sha = pr.merge_commit_sha;
+                  const body = [
+                    marker,
+                    `**Hotfix unito in \`${PROD}\`: la correzione va riportata subito in \`${trunk}\`.**`,
+                    '',
+                    `Senza questo passo il prossimo rilascio da \`${trunk}\` ripristina il difetto.`,
+                    '',
+                    '```bash',
+                    'git fetch origin',
+                    `git checkout -b fix/${jira}_ritorno_hotfix origin/${trunk}`,
+                    `git cherry-pick -m 1 ${sha}`,
+                    `git push -u origin fix/${jira}_ritorno_hotfix`,
+                    `gh pr create --base ${trunk} --assignee @me --title "fix: ${jira} ritorno dell'hotfix nel trunk" --body ""`,
+                    '```',
+                  ].join('\n');
+                  await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+                }
+              }
+              return;
+            }
+
+            if (kind === 'hotfix') {
+              core.notice(`Hotfix da ${head}: ammesso. Dopo il merge la correzione va riportata in ${trunk}.`);
+              return;
+            }
+
+            // 2. PR di rilascio: ogni commit deve già stare nel trunk.
+            if (head !== trunk) {
+              const cmp = await github.rest.repos.compareCommitsWithBasehead(
+                { owner, repo, basehead: `${trunk}...${pr.head.sha}` });
+              if (cmp.data.ahead_by > 0) {
+                core.setFailed(
+                  `Il branch ${head} contiene ${cmp.data.ahead_by} commit che non sono in ${trunk}. ` +
+                  `Un branch release/* si crea da un commit del trunk e non riceve altro lavoro.`);
+                return;
+              }
+            }
+
+            // Elenco delle PR incluse, dai commit della PR di rilascio.
+            const commits = await github.paginate(github.rest.pulls.listCommits,
+              { owner, repo, pull_number: pr.number, per_page: 100 });
+            const jiraBase = (process.env.JIRA_BASE_URL || '').replace(/\/+$/, '');
+            const cell = s => String(s).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').replace(/@/g, '@\u200b');
+            const rows = [];
+            const seen = new Set();
+            for (const c of commits) {
+              if ((c.parents || []).length > 1) continue;   // merge commit: nessun lavoro proprio
+              const subject = c.commit.message.split('\n')[0];
+              const m = subject.match(/\(#(\d+)\)\s*$/);
+              let ref, title = subject, author = c.author?.login || c.commit.author?.name || '';
+              if (m) {
+                const n = Number(m[1]);
+                if (seen.has(n)) continue;
+                seen.add(n);
+                ref = `#${n}`;
+                title = subject.replace(/\s*\(#\d+\)\s*$/, '');
+                try {
+                  const src = await github.rest.pulls.get({ owner, repo, pull_number: n });
+                  title = src.data.title;
+                  author = src.data.user?.login || author;
+                } catch (e) {
+                  core.info(`PR #${n} non leggibile: uso il messaggio del commit.`);
+                }
+              } else {
+                ref = `\`${c.sha.slice(0, 7)}\``;
+              }
+              const ids = [...new Set(title.match(/[A-Z][A-Z0-9]+-\d+/g) || [])];
+              const tasks = ids.length
+                ? ids.map(id => jiraBase ? `[${id}](${jiraBase}/browse/${id})` : id).join(', ')
+                : '—';
+              rows.push(`| ${ref} | ${tasks} | ${cell(title)} | ${author ? '`' + cell(author) + '`' : '—'} |`);
+            }
+
+            const START = '<!-- promozione:rilascio:start -->';
+            const END = '<!-- promozione:rilascio:end -->';
+            const block = [
+              START,
+              '## Rilascio',
+              '',
+              `PR di rilascio da \`${head}\` a \`${PROD}\`: ${rows.length} ${rows.length === 1 ? 'modifica' : 'modifiche'}.`,
+              '',
+              `L'approvazione **autorizza il rilascio in produzione**: attesta che le modifiche elencate hanno superato il test del Product (TEST OK) o la verifica tecnica. Non è una review del codice, già fatta sulle PR elencate. Merge con **merge commit**.`,
+              '',
+              ...(rows.length ? ['| PR | Task | Titolo | Autore |', '|---|---|---|---|', ...rows] : ['_Nessuna modifica da rilasciare._']),
+              ...(commits.length >= 250 ? ['', '_Elenco limitato ai primi 250 commit: la PR ne contiene di più._'] : []),
+              END,
+            ].join('\n');
+
+            const current = pr.body || '';
+            let next;
+            const i = current.indexOf(START), j = current.indexOf(END);
+            if (i !== -1 && j > i) next = current.slice(0, i) + block + current.slice(j + END.length);
+            else next = current.trim() ? `${block}\n\n${current}` : block;
+            if (next !== current) {
+              await github.rest.pulls.update({ owner, repo, pull_number: pr.number, body: next });
+              core.info('Elenco delle modifiche aggiornato nel corpo della PR.');
+            }
+            core.notice(`PR di rilascio da ${head}: ${rows.length} modifiche.`);
