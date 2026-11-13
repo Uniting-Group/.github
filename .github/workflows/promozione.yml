@@ -80,7 +80,6 @@ jobs:
             const trunk = context.payload.repository.default_branch;
             const base = pr.base.ref;
             const head = pr.head.ref;
-            const action = context.payload.action;
 
             // Fuori dal modello a due branch, o PR non verso la produzione.
             if (trunk === PROD) {
@@ -91,11 +90,9 @@ jobs:
               core.notice(`PR verso ${base}: il controllo vale solo verso ${PROD}.`);
               return;
             }
-            // `edited` interessa solo se è cambiata la base.
-            if (action === 'edited' && !context.payload.changes?.base) {
-              core.notice('Modifica di titolo o corpo: niente da ricontrollare.');
-              return;
-            }
+            // Nessun evento esce prima dei controlli: con una sola esecuzione per
+            // PR, un evento che uscisse subito (es. `edited`) annullerebbe il
+            // controllo dell'ultimo push senza rifarlo. Il controllo è idempotente.
             if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
               core.setFailed(`Verso ${PROD} sono ammesse solo PR da branch di questo repository.`);
               return;
