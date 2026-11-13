@@ -15,8 +15,8 @@ name: Promozione
 #   2. sulla PR di rilascio scrive nel corpo l'elenco delle PR incluse, con i
 #      task, tra i marker `promozione:rilascio`: chi approva autorizza il
 #      rilascio di quell'elenco, non rilegge il codice;
-#   3. quando un hotfix viene unito, lascia un commento con i comandi per
-#      riportare la correzione nel trunk.
+#   3. sulla PR di un hotfix lascia, all'apertura, un commento con i comandi
+#      per riportare la correzione nel trunk dopo il merge.
 #
 # Distribuito come Required Workflow tramite un Org Ruleset sul branch `main`
 # dei repo passati al modello: nessun file da aggiungere ai repo. Dove il
@@ -32,6 +32,12 @@ name: Promozione
 # GITHUB_TOKEN del repo. Titoli e nomi di branch arrivano dalle API come dati
 # e non entrano mai in un comando di shell.
 #
+# Eventi: sotto il Ruleset partono solo opened, synchronize e reopened
+# (verificato il 13/11/2026: `closed` ed `edited` non avviano il workflow).
+# Per questo il promemoria dell'hotfix si scrive all'apertura e non al merge,
+# e una PR la cui base viene spostata su `main` si controlla al push
+# successivo. `edited` resta tra i tipi per chi richiama il workflow dal repo.
+#
 # Limiti noti:
 #   - il corpo si aggiorna a ogni evento della PR (apertura, nuovo commit sul
 #     branch di origine, riapertura), non quando cambia un task su Jira;
@@ -42,7 +48,7 @@ name: Promozione
 on:
   workflow_call:
   pull_request:
-    types: [opened, synchronize, reopened, edited, closed]
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   pull-requests: write
@@ -100,36 +106,31 @@ jobs:
               return;
             }
 
-            // Hotfix unito: promemoria per riportare la correzione nel trunk.
-            if (action === 'closed') {
-              if (kind === 'hotfix' && pr.merged) {
-                const marker = '<!-- promozione:ritorno-hotfix -->';
-                const comments = await github.paginate(github.rest.issues.listComments,
-                  { owner, repo, issue_number: pr.number, per_page: 100 });
-                if (!comments.some(c => (c.body || '').includes(marker))) {
-                  const jira = (pr.title.match(/[A-Z][A-Z0-9]+-\d+/) || head.match(/[A-Z][A-Z0-9]+-\d+/) || ['ID-XXXX'])[0];
-                  const sha = pr.merge_commit_sha;
-                  const body = [
-                    marker,
-                    `**Hotfix unito in \`${PROD}\`: la correzione va riportata subito in \`${trunk}\`.**`,
-                    '',
-                    `Senza questo passo il prossimo rilascio da \`${trunk}\` ripristina il difetto.`,
-                    '',
-                    '```bash',
-                    'git fetch origin',
-                    `git checkout -b fix/${jira}_ritorno_hotfix origin/${trunk}`,
-                    `git cherry-pick -m 1 ${sha}`,
-                    `git push -u origin fix/${jira}_ritorno_hotfix`,
-                    `gh pr create --base ${trunk} --assignee @me --title "fix: ${jira} ritorno dell'hotfix nel trunk" --body ""`,
-                    '```',
-                  ].join('\n');
-                  await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
-                }
-              }
-              return;
-            }
-
+            // Hotfix: ammesso. Il promemoria per riportare la correzione nel
+            // trunk si lascia subito, una volta sola: al merge il workflow
+            // non parte.
             if (kind === 'hotfix') {
+              const marker = '<!-- promozione:ritorno-hotfix -->';
+              const comments = await github.paginate(github.rest.issues.listComments,
+                { owner, repo, issue_number: pr.number, per_page: 100 });
+              if (!comments.some(c => (c.body || '').includes(marker))) {
+                const jira = (pr.title.match(/[A-Z][A-Z0-9]+-\d+/) || head.match(/[A-Z][A-Z0-9]+-\d+/) || ['ID-XXXX'])[0];
+                const body = [
+                  marker,
+                  `**Hotfix verso \`${PROD}\`: dopo il merge la correzione va riportata subito in \`${trunk}\`.**`,
+                  '',
+                  `Senza questo passo il prossimo rilascio da \`${trunk}\` ripristina il difetto. A merge avvenuto:`,
+                  '',
+                  '```bash',
+                  'git fetch origin',
+                  `git checkout -b fix/${jira}_ritorno_hotfix origin/${trunk}`,
+                  `git cherry-pick -m 1 "$(gh pr view ${pr.number} --json mergeCommit -q .mergeCommit.oid)"`,
+                  `git push -u origin fix/${jira}_ritorno_hotfix`,
+                  `gh pr create --base ${trunk} --assignee @me --title "fix: ${jira} ritorno dell'hotfix nel trunk" --body ""`,
+                  '```',
+                ].join('\n');
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+              }
               core.notice(`Hotfix da ${head}: ammesso. Dopo il merge la correzione va riportata in ${trunk}.`);
               return;
             }
@@ -140,7 +141,7 @@ jobs:
                 { owner, repo, basehead: `${trunk}...${pr.head.sha}` });
               if (cmp.data.ahead_by > 0) {
                 core.setFailed(
-                  `Il branch ${head} contiene ${cmp.data.ahead_by} commit che non sono in ${trunk}. ` +
+                  `Il branch ${head} contiene commit che non sono in ${trunk} (${cmp.data.ahead_by}). ` +
                   `Un branch release/* si crea da un commit del trunk e non riceve altro lavoro.`);
                 return;
               }
