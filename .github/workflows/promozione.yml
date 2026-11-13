@@ -60,6 +60,12 @@ jobs:
   promozione:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Una sola esecuzione per PR: un nuovo evento annulla quella in corso,
+    # che altrimenti potrebbe finire dopo e riscrivere nel corpo un elenco
+    # ormai superato.
+    concurrency:
+      group: promozione-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     steps:
       - name: Controllo della PR verso il branch di produzione
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -152,7 +158,12 @@ jobs:
             const commits = await github.paginate(github.rest.pulls.listCommits,
               { owner, repo, pull_number: pr.number, per_page: 100 });
             const jiraBase = (process.env.JIRA_BASE_URL || '').replace(/\/+$/, '');
-            const cell = s => String(s).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').replace(/@/g, '@\u200b');
+            // Titoli e nomi sono dati: niente HTML (un titolo con il marker di
+            // chiusura sposterebbe la fine del blocco), niente separatori di
+            // tabella, niente menzioni.
+            const cell = s => String(s)
+              .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+              .replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').replace(/@/g, '@\u200b');
             const rows = [];
             const seen = new Set();
             for (const c of commits) {
@@ -198,7 +209,16 @@ jobs:
               END,
             ].join('\n');
 
-            const current = pr.body || '';
+            // Il corpo si rilegge adesso, non dal payload dell'evento: nel
+            // frattempo può averlo modificato un altro workflow o una persona.
+            // Se la testa è cambiata, un'esecuzione più recente scriverà
+            // l'elenco giusto: questa non scrive.
+            const fresh = (await github.rest.pulls.get({ owner, repo, pull_number: pr.number })).data;
+            if (fresh.head.sha !== pr.head.sha) {
+              core.notice('La testa della PR è cambiata durante il controllo: il corpo lo aggiorna la prossima esecuzione.');
+              return;
+            }
+            const current = fresh.body || '';
             let next;
             const i = current.indexOf(START), j = current.indexOf(END);
             if (i !== -1 && j > i) next = current.slice(0, i) + block + current.slice(j + END.length);
