@@ -1,0 +1,148 @@
+name: CI Node
+
+# CI minima per i repo Node.js (ONE-1247): installazione delle dipendenze dal
+# lockfile ed esecuzione, nell'ordine, degli script indicati (di norma
+# typecheck, test e build). Serve a dare a ogni PR un check che dica se il
+# codice si installa e si costruisce, anche alle PR di Dependabot.
+#
+# È un workflow riusabile, non un Required Workflow: lo stack cambia da repo a
+# repo, quindi ogni repo lo richiama da un proprio file (vedi il modello in
+# workflow-templates/ci-node.yml) e sceglie cartella, versione di Node e
+# script. Il check che ne risulta si chiama "<job del chiamante> / ci" e si
+# rende obbligatorio da org-config, tra i check richiesti del trunk.
+#
+# Perché il check arrivi su ogni PR, il workflow chiamante non deve avere
+# filtri `paths` né condizioni sul nome del branch: un job saltato lascia la
+# PR senza il check richiesto, oppure lo fa risultare superato senza aver
+# eseguito nulla.
+#
+# Fiducia: il job esegue codice del repo (script di installazione e script di
+# package.json), quindi gira con il solo GITHUB_TOKEN in lettura, senza
+# segreti e senza credenziali cloud. Una build che ha bisogno di variabili
+# d'ambiente usa i valori di esempio del repo (`env-example`), mai quelli veri.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Cartella del progetto Node, relativa alla radice del repo.
+        type: string
+        default: "."
+      node-version:
+        description: Versione di Node.js (ignorata se il progetto ha un file .nvmrc).
+        type: string
+        default: "22"
+      scripts:
+        description: >-
+          Script di package.json da eseguire, nell'ordine, separati da spazi.
+          Quelli che il progetto non definisce vengono saltati; se non ne esiste
+          nessuno il job fallisce.
+        type: string
+        default: "typecheck test build"
+      env-example:
+        description: >-
+          File di esempio da copiare in .env prima degli script, se esiste.
+          Stringa vuota per non copiare nulla.
+        type: string
+        default: ".env.example"
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Gestore dei pacchetti e versione di Node
+        id: rileva
+        run: |
+          set -euo pipefail
+          test -f package.json || { echo "::error::Nessun package.json in questa cartella."; exit 1; }
+          if   [ -f pnpm-lock.yaml ];    then pm=pnpm; lock=pnpm-lock.yaml
+          elif [ -f yarn.lock ];         then pm=yarn; lock=yarn.lock
+          elif [ -f package-lock.json ]; then pm=npm;  lock=package-lock.json
+          else
+            echo "::error::Nessun lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock): senza, l'installazione non è riproducibile."
+            exit 1
+          fi
+          echo "pm=$pm" >> "$GITHUB_OUTPUT"
+          echo "lock=$lock" >> "$GITHUB_OUTPUT"
+          if [ -f .nvmrc ]; then echo "nvmrc=true" >> "$GITHUB_OUTPUT"; else echo "nvmrc=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.rileva.outputs.nvmrc == 'true' && '' || inputs.node-version }}
+          node-version-file: ${{ steps.rileva.outputs.nvmrc == 'true' && format('{0}/.nvmrc', inputs.working-directory) || '' }}
+
+      - name: File di ambiente di esempio
+        if: inputs.env-example != ''
+        env:
+          ENV_EXAMPLE: ${{ inputs.env-example }}
+        run: |
+          set -euo pipefail
+          if [ -f "$ENV_EXAMPLE" ] && [ ! -f .env ]; then
+            cp -- "$ENV_EXAMPLE" .env
+            echo "Copiato $ENV_EXAMPLE in .env"
+          else
+            echo "Nessun file di esempio da copiare."
+          fi
+
+      - name: Installazione dal lockfile
+        env:
+          PM: ${{ steps.rileva.outputs.pm }}
+        run: |
+          set -euo pipefail
+          case "$PM" in
+            npm)  npm ci ;;
+            pnpm) corepack enable && pnpm install --frozen-lockfile ;;
+            yarn) corepack enable && yarn install --immutable || yarn install --frozen-lockfile ;;
+          esac
+
+      - name: Script
+        env:
+          PM: ${{ steps.rileva.outputs.pm }}
+          SCRIPTS: ${{ inputs.scripts }}
+        run: |
+          set -euo pipefail
+          eseguiti=0
+          {
+            echo "### CI Node"
+            echo
+            echo "| Script | Esito |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for s in $SCRIPTS; do
+            if ! printf '%s' "$s" | grep -Eq '^[A-Za-z0-9:_.-]+$'; then
+              echo "::error::Nome di script non valido: $s"
+              exit 1
+            fi
+            if node -e 'const s=require("./package.json").scripts||{};process.exit(Object.prototype.hasOwnProperty.call(s,process.argv[1])?0:1)' "$s"; then
+              echo "::group::$PM run $s"
+              if "$PM" run "$s"; then
+                echo "::endgroup::"
+                echo "| \`$s\` | superato |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::endgroup::"
+                echo "| \`$s\` | **fallito** |" >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::Lo script \"$s\" è fallito."
+                exit 1
+              fi
+              eseguiti=$((eseguiti + 1))
+            else
+              echo "Script \"$s\" non definito in package.json: saltato."
+              echo "| \`$s\` | non definito |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          if [ "$eseguiti" -eq 0 ]; then
+            echo "::error::Nessuno degli script richiesti ($SCRIPTS) è definito in package.json: il check non avrebbe verificato nulla."
+            exit 1
+          fi
