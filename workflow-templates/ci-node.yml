@@ -1,0 +1,28 @@
+name: CI
+
+# Richiama la CI minima per Node.js di Uniting-Group/.github: installazione dal
+# lockfile ed esecuzione degli script indicati. Niente filtri `paths` né
+# condizioni sul nome del branch: il check deve arrivare su ogni PR, comprese
+# quelle di Dependabot.
+#
+# Nei repo con ambiente di staging le PR vanno verso `staging` (trunk) e, per
+# rilasci e hotfix, verso `main`; negli altri solo verso `main`.
+
+on:
+  pull_request:
+    branches: [main, staging]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    # Il check si chiama "ci / ci": è il nome da mettere tra i check richiesti.
+    concurrency:
+      group: ci-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    uses: Uniting-Group/.github/.github/workflows/ci-node.yml@main
+    with:
+      # working-directory: "."            # cartella del progetto Node
+      # node-version: "22"                # ignorata se c'è un .nvmrc
+      scripts: "typecheck test build"     # quelli non definiti vengono saltati

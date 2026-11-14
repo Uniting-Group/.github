@@ -1,0 +1,7 @@
+{
+  "name": "CI Node",
+  "description": "CI minima per i repo Node.js: installazione dal lockfile ed esecuzione di typecheck, test e build sulle PR.",
+  "iconName": "octicon check-circle",
+  "categories": ["Continuous integration", "JavaScript"],
+  "filePatterns": ["package.json$"]
+}
