@@ -78,10 +78,20 @@ jobs:
           echo "lock=$lock" >> "$GITHUB_OUTPUT"
           if [ -f .nvmrc ]; then echo "nvmrc=true" >> "$GITHUB_OUTPUT"; else echo "nvmrc=false" >> "$GITHUB_OUTPUT"; fi
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Due passi alternativi: setup-node dà la precedenza a node-version, e
+      # un'espressione con valore vuoto ricadrebbe comunque sull'input. Con un
+      # .nvmrc vale solo il file.
+      - name: Node dalla versione del progetto (.nvmrc)
+        if: steps.rileva.outputs.nvmrc == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ steps.rileva.outputs.nvmrc == 'true' && '' || inputs.node-version }}
-          node-version-file: ${{ steps.rileva.outputs.nvmrc == 'true' && format('{0}/.nvmrc', inputs.working-directory) || '' }}
+          node-version-file: ${{ format('{0}/.nvmrc', inputs.working-directory) }}
+
+      - name: Node dalla versione indicata
+        if: steps.rileva.outputs.nvmrc != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
 
       - name: File di ambiente di esempio
         if: inputs.env-example != ''
@@ -101,10 +111,31 @@ jobs:
           PM: ${{ steps.rileva.outputs.pm }}
         run: |
           set -euo pipefail
+          echo "Node $(node --version)"
+          # Corepack non è più distribuito con Node dalla versione 25: se manca
+          # si installa il pacchetto, poi si abilita.
+          corepack_on() {
+            command -v corepack >/dev/null 2>&1 || npm install --global corepack
+            corepack enable
+          }
           case "$PM" in
-            npm)  npm ci ;;
-            pnpm) corepack enable && pnpm install --frozen-lockfile ;;
-            yarn) corepack enable && yarn install --immutable || yarn install --frozen-lockfile ;;
+            npm)
+              npm ci
+              ;;
+            pnpm)
+              corepack_on
+              pnpm install --frozen-lockfile
+              ;;
+            yarn)
+              corepack_on
+              # Yarn 1 ignora --immutable e aggiornerebbe il lockfile senza
+              # errore: l'opzione giusta dipende dalla versione, e l'esito del
+              # comando scelto è quello del passo.
+              case "$(yarn --version)" in
+                1.*) yarn install --frozen-lockfile ;;
+                *)   yarn install --immutable ;;
+              esac
+              ;;
           esac
 
       - name: Script
