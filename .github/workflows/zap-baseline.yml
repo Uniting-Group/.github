@@ -142,15 +142,14 @@ jobs:
         run: |
           set -euo pipefail
           origin=$(printf '%s' "$TARGET" | grep -Eo '^https://[^/]+')
-          # I cookie ricevuti si rimandano nei passi successivi della stessa
-          # catena, come farebbe un browser; il file si elimina a fine passo.
-          cookie=$(mktemp "$RUNNER_TEMP/cookie.XXXXXX")
-          trap 'rm -f "$cookie"' EXIT
+          # Niente cookie tra un passo e l'altro: nemmeno la richiesta
+          # preliminare di ZAP li rimanda, e il controllo deve percorrere la
+          # stessa catena. Un bersaglio che reindirizza finché non riceve un
+          # cookie si ferma qui con «Troppi reindirizzamenti».
           catena() {
             local url="$1" esito codice prossimo
-            : > "$cookie"
             for _ in 1 2 3 4 5 6; do
-              esito=$(curl -sS --globoff --proto '=https' -b "$cookie" -c "$cookie" -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
+              esito=$(curl -sS --globoff --proto '=https' -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
                 || { echo "::error::Il bersaglio non risponde."; return 1; }
               codice=${esito%% *}
               prossimo=${esito#* }
