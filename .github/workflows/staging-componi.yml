@@ -1,0 +1,124 @@
+name: Staging composto — componi
+
+# Staging composto (ONE-1242): lo staging pubblica il trunk più le PR aperte
+# verso il trunk che portano la label `deploy-staging`. Serve a provare una
+# modifica sullo staging prima della review, anche con più attività insieme,
+# senza unire il branch a mano nel trunk. L'unione è rifatta da zero a ogni
+# deploy e non viene scritta in nessun branch: nel trunk continua a entrare
+# solo codice rivisto.
+#
+# Questo workflow riusabile decide la composizione: prova a unire al trunk,
+# una dopo l'altra, le PR con la label, dalla più vecchia in prova alla più
+# recente. Una PR che non si unisce al resto resta fuori; le altre no. Non
+# pubblica nulla e non esegue codice del repo (solo git e API): restituisce
+# l'elenco, con i commit esatti, al job di deploy del repo chiamante, che
+# rifà la stessa unione e pubblica. I commenti sulle PR li scrive, a deploy
+# finito, staging-esito.yml. Il modello del workflow chiamante è in
+# workflow-templates/deploy-staging.yml.
+#
+# Entrano solo le PR che hanno il trunk come destinazione e il branch nello
+# stesso repo. Una PR aperta sopra il branch di un'altra PR (stacked) non
+# entra da sola: si mette la label sulla PR alla base della pila.
+#
+# Non è adatto ai repo infrastrutturali: lì pubblicare un branch vorrebbe
+# dire applicare sull'ambiente modifiche non riviste.
+
+on:
+  workflow_call:
+    inputs:
+      trunk:
+        description: Branch pubblicato sullo staging.
+        type: string
+        default: staging
+      label:
+        description: Label che mette una PR in prova sullo staging.
+        type: string
+        default: deploy-staging
+    outputs:
+      trunk_sha:
+        description: Commit del trunk da cui parte la composizione.
+        value: ${{ jobs.componi.outputs.trunk_sha }}
+      incluse:
+        description: 'PR da unire al trunk, nell''ordine, in JSON: [{"n": 12, "sha": "..."}].'
+        value: ${{ jobs.componi.outputs.incluse }}
+      escluse:
+        description: 'PR con la label rimaste fuori per un conflitto, in JSON: [{"n": 15, "sha": "...", "file": ["..."]}].'
+        value: ${{ jobs.componi.outputs.escluse }}
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  componi:
+    name: componi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      trunk_sha: ${{ steps.componi.outputs.trunk_sha }}
+      incluse: ${{ steps.componi.outputs.incluse }}
+      escluse: ${{ steps.componi.outputs.escluse }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/heads/${{ inputs.trunk }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Composizione di prova
+        id: componi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TRUNK: ${{ inputs.trunk }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          git config user.name "deploy-staging"
+          git config user.email "deploy-staging@users.noreply.github.com"
+          T="$RUNNER_TEMP"
+          trunk_sha=$(git rev-parse HEAD)
+
+          # PR aperte verso il trunk con la label, dalla più vecchia in prova
+          # alla più recente: se due non si uniscono, resta fuori l'ultima
+          # arrivata. L'ordine è il momento in cui la label è stata messa.
+          : > "$T/candidate.tsv"
+          gh api "repos/$REPO/pulls?state=open&base=$TRUNK&per_page=100" --paginate \
+            --jq '.[] | select(any(.labels[]; .name == env.LABEL)) | select(.head.repo.full_name == env.REPO) | .number' |
+          while read -r n; do
+            quando=$(gh api "repos/$REPO/issues/$n/timeline?per_page=100" --paginate \
+              --jq '.[] | select(.event == "labeled" and .label.name == env.LABEL) | .created_at' | tail -n 1)
+            printf '%s\t%s\n' "${quando:-9999}" "$n" >> "$T/candidate.tsv"
+          done
+          sort -k1,1 -k2,2n "$T/candidate.tsv" -o "$T/candidate.tsv"
+
+          incluse='[]'
+          escluse='[]'
+          while IFS=$'\t' read -r _ n; do
+            git fetch --quiet origin "refs/pull/$n/head"
+            sha=$(git rev-parse FETCH_HEAD)
+            if git merge --quiet --no-ff --no-edit -m "prova: PR #$n" "$sha" >/dev/null 2>"$T/merge.err"; then
+              incluse=$(jq -c --argjson n "$n" --arg sha "$sha" '. + [{n: $n, sha: $sha}]' <<<"$incluse")
+            else
+              file=$(git diff --name-only --diff-filter=U | head -n 5 | jq -Rsc 'split("\n") | map(select(. != ""))')
+              git merge --abort 2>/dev/null || git reset --quiet --hard
+              escluse=$(jq -c --argjson n "$n" --arg sha "$sha" --argjson file "${file:-[]}" '. + [{n: $n, sha: $sha, file: $file}]' <<<"$escluse")
+            fi
+          done < "$T/candidate.tsv"
+
+          {
+            echo "trunk_sha=$trunk_sha"
+            echo "incluse=$incluse"
+            echo "escluse=$escluse"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Staging composto"
+            echo
+            echo "| Cosa | Commit | Stato |"
+            echo "|---|---|---|"
+            echo "| trunk \`$TRUNK\` | \`${trunk_sha:0:7}\` | codice rivisto |"
+            jq -r '.[] | "| PR #\(.n) | `\(.sha[0:7])` | in prova, non ancora rivisto |"' <<<"$incluse"
+            jq -r '.[] | "| PR #\(.n) | `\(.sha[0:7])` | **fuori**: non si unisce al resto |"' <<<"$escluse"
+          } >> "$GITHUB_STEP_SUMMARY"

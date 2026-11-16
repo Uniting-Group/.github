@@ -1,0 +1,120 @@
+name: Staging composto — esito
+
+# Staging composto (ONE-1242, vedi staging-componi.yml): a deploy finito
+# scrive su ogni PR con la label un solo commento, aggiornato a ogni giro.
+# Dice «in prova su staging» solo se la pubblicazione è riuscita; altrimenti
+# dice che il deploy non è riuscito, o che la PR è rimasta fuori per un
+# conflitto. Ritira il commento alle PR che non sono più in prova.
+#
+# Non esegue codice del repo: è il solo job dello staging composto ad avere
+# il token in scrittura, e lo usa per i commenti.
+
+on:
+  workflow_call:
+    inputs:
+      trunk:
+        type: string
+        default: staging
+      label:
+        type: string
+        default: deploy-staging
+      trunk_sha:
+        description: Output `trunk_sha` di staging-componi.yml.
+        type: string
+        required: true
+      incluse:
+        description: Output `incluse` di staging-componi.yml.
+        type: string
+        required: true
+      escluse:
+        description: Output `escluse` di staging-componi.yml.
+        type: string
+        required: true
+      esito:
+        description: Esito del job di deploy del repo chiamante (`needs.<job>.result`).
+        type: string
+        required: true
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  esito:
+    name: esito
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Commenti sulle PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRUNK: ${{ inputs.trunk }}
+          LABEL: ${{ inputs.label }}
+          TRUNK_SHA: ${{ inputs.trunk_sha }}
+          INCLUSE: ${{ inputs.incluse }}
+          ESCLUSE: ${{ inputs.escluse }}
+          PUBBLICA: ${{ inputs.esito }}
+          PR_EVENTO: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          MARCA='<!-- deploy-staging -->'
+          FUORI="$MARCA
+          **Non più in prova su staging**"
+
+          # commenta <pr> <testo> [solo-se-esiste]
+          commenta() {
+            local n="$1" testo="$2" id
+            id=$(gh api "repos/$REPO/issues/$n/comments?per_page=100" --paginate \
+              --jq '.[] | select(.body | startswith("<!-- deploy-staging -->")) | .id' | tail -n 1)
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$testo" >/dev/null
+            elif [ "${3:-}" != "solo-se-esiste" ]; then
+              gh api -X POST "repos/$REPO/issues/$n/comments" -f body="$testo" >/dev/null
+            fi
+          }
+
+          # Il commento di una PR che non è più in prova, se dice ancora altro.
+          ritira() {
+            local n="$1" corpo
+            corpo=$(gh api "repos/$REPO/issues/$n/comments?per_page=100" --paginate \
+              --jq '[.[] | select(.body | startswith("<!-- deploy-staging -->"))] | last | .body // ""')
+            [ -n "$corpo" ] || return 0
+            case "$corpo" in "$FUORI"*) return 0 ;; esac
+            commenta "$n" "$FUORI (label \`$LABEL\` tolta, PR chiusa o destinazione cambiata). [Esecuzione]($RUN_URL)" solo-se-esiste
+          }
+
+          elenco=$(jq -r '[.[] | "#\(.n)"] | join(" ")' <<<"$INCLUSE")
+
+          jq -r '.[] | "\(.n) \(.sha)"' <<<"$INCLUSE" | while read -r n sha; do
+            altre=$(jq -r --argjson me "$n" '[.[] | select(.n != $me) | "#\(.n)"] | join(" ")' <<<"$INCLUSE")
+            if [ "$PUBBLICA" = "success" ]; then
+              commenta "$n" "$MARCA
+          **In prova su staging** al commit \`${sha:0:7}\`, insieme al trunk \`$TRUNK\` (\`${TRUNK_SHA:0:7}\`)${altre:+ e a $altre}.
+
+          Altri push su questo branch aggiornano lo staging da soli. Per togliere la modifica dallo staging basta togliere la label \`$LABEL\`. [Esecuzione]($RUN_URL)"
+            else
+              commenta "$n" "$MARCA
+          **Deploy di staging non riuscito** con questa PR al commit \`${sha:0:7}\`, il trunk \`$TRUNK\` (\`${TRUNK_SHA:0:7}\`)${altre:+ e $altre}: lo staging è rimasto alla composizione precedente. Il motivo è nell'[esecuzione]($RUN_URL)."
+            fi
+          done
+
+          jq -r '.[] | "\(.n) \(.sha) \(.file | map("`" + . + "`") | join(" "))"' <<<"$ESCLUSE" | while read -r n sha file; do
+            commenta "$n" "$MARCA
+          **Non pubblicata su staging**: al commit \`${sha:0:7}\` non si unisce al resto di quello che è in prova (trunk \`$TRUNK\`${elenco:+ più $elenco}). File in conflitto: ${file:-non rilevati}.
+
+          Le altre modifiche non ne risentono. Si può aggiornare il branch dal trunk, oppure accordarsi con chi ha l'altra PR in prova su chi prova per primo. [Esecuzione]($RUN_URL)"
+          done
+
+          # Tutte le PR aperte che non sono più in prova, non solo quella
+          # dell'evento: un evento in coda può essere stato sostituito da un
+          # altro. In più la PR dell'evento, che può essere chiusa.
+          in_prova=$(jq -c '[.[][].n]' <<<"[$INCLUSE,$ESCLUSE]")
+          {
+            gh api "repos/$REPO/pulls?state=open&per_page=100" --paginate --jq '.[].number'
+            [ -z "$PR_EVENTO" ] || echo "$PR_EVENTO"
+          } | sort -un | while read -r n; do
+            jq -e --argjson n "$n" 'index($n) == null' <<<"$in_prova" >/dev/null || continue
+            ritira "$n"
+          done

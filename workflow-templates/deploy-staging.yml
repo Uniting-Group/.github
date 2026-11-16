@@ -1,0 +1,105 @@
+name: Deploy staging
+
+# Staging composto: lo staging pubblica il trunk più le PR aperte verso il
+# trunk che portano la label `deploy-staging` (da creare nel repo). La logica
+# è in Uniting-Group/.github (staging-componi.yml e staging-esito.yml); qui
+# restano gli eventi e il deploy vero, nel job `pubblica`.
+#
+# Parte a ogni push sul trunk e a ogni evento di una PR che cambia la
+# composizione: label messa o tolta, nuovi commit su una PR in prova, PR in
+# prova chiusa o riaperta, PR con la label spostata sul trunk.
+#
+# Perché `pull_request_target` e non `pull_request`: parte anche quando la PR
+# è in conflitto con il trunk, e il workflow eseguito è sempre quello del
+# trunk, quindi una PR non può cambiare il modo in cui lo staging è composto.
+# Per lo stesso motivo una modifica a questo file vale solo dopo il merge.
+#
+# Lo stesso repo non deve avere un altro workflow che pubblica sullo staging
+# al push sul trunk: sovrascriverebbe la composizione con il solo trunk.
+#
+# Fiducia: il job `pubblica` esegue il codice delle PR in prova, che non è
+# ancora stato rivisto, con le credenziali dello staging. È lo stesso rischio
+# di un branch unito a mano nel trunk di staging; non va usato dove quelle
+# credenziali arrivano oltre lo staging.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [staging]
+  pull_request_target:
+    branches: [staging]
+    types: [labeled, unlabeled, synchronize, closed, reopened, edited]
+
+permissions: {}
+
+# Una composizione alla volta; di quelle in coda basta l'ultima, perché ogni
+# esecuzione ricalcola tutto. Gli eventi che non cambiano la composizione
+# (stessa condizione del job `componi`) vanno in un gruppo a parte: altrimenti
+# un'esecuzione che non fa nulla prenderebbe il posto di una in coda che serve.
+concurrency:
+  group: >-
+    ${{ (
+    github.event_name != 'pull_request_target' ||
+    ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name == 'deploy-staging') ||
+    ((github.event.action == 'synchronize' || github.event.action == 'closed' || github.event.action == 'reopened') && contains(github.event.pull_request.labels.*.name, 'deploy-staging')) ||
+    (github.event.action == 'edited' && github.event.changes.base != null && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
+    ) && 'deploy-staging' || format('deploy-staging-nulla-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  componi:
+    # Gli eventi di PR contano solo se riguardano la label.
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name == 'deploy-staging') ||
+      ((github.event.action == 'synchronize' || github.event.action == 'closed' || github.event.action == 'reopened') && contains(github.event.pull_request.labels.*.name, 'deploy-staging')) ||
+      (github.event.action == 'edited' && github.event.changes.base != null && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: Uniting-Group/.github/.github/workflows/staging-componi.yml@main
+
+  pubblica:
+    name: pubblica
+    needs: componi
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.componi.outputs.trunk_sha }}
+          fetch-depth: 0
+
+      # Stessa unione del job `componi`, sugli stessi commit.
+      - name: Unione delle PR in prova
+        env:
+          INCLUSE: ${{ needs.componi.outputs.incluse }}
+        run: |
+          set -euo pipefail
+          git config user.name "deploy-staging"
+          git config user.email "deploy-staging@users.noreply.github.com"
+          jq -r '.[] | "\(.n) \(.sha)"' <<<"$INCLUSE" | while read -r n sha; do
+            git fetch --quiet origin "$sha"
+            git merge --quiet --no-ff --no-edit -m "prova: PR #$n" "$sha"
+          done
+
+      # Da qui in poi: build e deploy del repo, come per il solo trunk.
+      - name: Deploy
+        run: echo "Sostituire con il deploy di staging del repo."
+
+  esito:
+    needs: [componi, pubblica]
+    if: always() && needs.componi.result == 'success'
+    permissions:
+      pull-requests: write
+      issues: write
+    uses: Uniting-Group/.github/.github/workflows/staging-esito.yml@main
+    with:
+      trunk_sha: ${{ needs.componi.outputs.trunk_sha }}
+      incluse: ${{ needs.componi.outputs.incluse }}
+      escluse: ${{ needs.componi.outputs.escluse }}
+      esito: ${{ needs.pubblica.result }}
