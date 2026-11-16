@@ -16,10 +16,11 @@ name: ZAP baseline
 #     dall'origine il job si ferma prima di avviare ZAP, e il container di
 #     ZAP risolve solo il nome del bersaglio. Due casi non sono coperti da
 #     questo secondo limite, e valgono solo se la risposta cambia tra il
-#     controllo e l'avvio di ZAP: un reindirizzamento verso un'altra porta
-#     dello stesso host e uno verso un indirizzo IP scritto al posto del
-#     nome. In entrambi parte una sola richiesta di lettura; l'esplorazione
-#     non prosegue fuori dall'origine;
+#     controllo e l'avvio di ZAP: un reindirizzamento verso un'altra porta o
+#     un altro schema dello stesso host e uno verso un indirizzo IP scritto
+#     al posto del nome. In entrambi ZAP segue quella sola catena di
+#     reindirizzamenti, con richieste di lettura; l'esplorazione non
+#     prosegue fuori dall'origine;
 #   - non usa credenziali: vede solo ciò che è raggiungibile senza accesso;
 #   - non esegue JavaScript: di un'applicazione a pagina singola vede la
 #     pagina d'ingresso e le risorse che questa richiama, non le viste interne.
@@ -34,9 +35,12 @@ name: ZAP baseline
 # Si usa solo su servizi propri e con l'approvazione prevista dal piano dei
 # test di sicurezza dell'organizzazione.
 #
-# Esito: il job fallisce se ZAP non parte, se il bersaglio non risponde o se
-# il piano termina con un errore. I rilievi non fanno fallire il job: li
-# esamina chi è responsabile dei test, dal riepilogo e dal report.
+# Esito: il job fallisce se un parametro non è valido, se il bersaglio non
+# risponde, non si risolve o reindirizza fuori dalla propria origine, se ZAP
+# non parte o il piano termina con un errore, e se dal log di ZAP non risulta
+# che i limiti dell'esplorazione sono stati applicati o risulta un job non
+# previsto. I rilievi non fanno fallire il job: li esamina chi è responsabile
+# dei test, dal riepilogo e dal report.
 #
 # Report: JSON e HTML come artifact del run, più il piano di automazione e il
 # log di ZAP. Contengono indirizzi ed estratti delle risposte: restano
@@ -229,7 +233,7 @@ jobs:
           # del bersaglio, con un indirizzo risolto qui. Una richiesta verso
           # un altro nome, anche per un reindirizzamento, non parte.
           host=$(printf '%s' "$TARGET" | sed -E 's#^https://([^/:]+).*#\1#')
-          ip=$(getent ahostsv4 "$host" | awk 'NR==1 {print $1}')
+          ip=$(getent ahostsv4 "$host" | awk 'NR==1 {print $1}') || true
           [ -n "$ip" ] || { echo "::error::Il nome del bersaglio non si risolve."; exit 1; }
           set +e
           docker run --rm --dns 127.0.0.1 --add-host "${host}:${ip}" -v "$wrk":/zap/wrk:rw "$ZAP_IMAGE" \
@@ -259,10 +263,12 @@ jobs:
             exit 1
           fi
           for limite in 'threadCount = 1' 'postForm = false' 'processForm = false' 'logoutAvoidance = true'; do
-            grep -qF "Job spider set ${limite}" "$wrk/zap.log" \
+            grep -qxF "Job spider set ${limite}" "$wrk/zap.log" \
               || { echo "::error::Limite non applicato dallo spider: ${limite}."; exit 1; }
           done
-          if grep -qE '^Job (activeScan|spiderAjax|spiderClient|openapi|graphql|soap|postman)' "$wrk/zap.log"; then
+          # Sono ammessi i soli job del piano: ogni altro job avviato è un errore.
+          if grep -E '^Job [^ ]+ started$' "$wrk/zap.log" \
+               | grep -vqxE 'Job (passiveScan-config|spider|passiveScan-wait|report) started'; then
             echo "::error::Il piano ha eseguito un job non previsto."
             exit 1
           fi
