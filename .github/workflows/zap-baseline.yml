@@ -10,11 +10,16 @@ name: ZAP baseline
 # Cosa non fa, per scelta:
 #   - non compila e non invia moduli (né POST né GET), e non segue i link di
 #     uscita dalla sessione (esclusi dal perimetro dell'esplorazione);
-#   - non esce dall'origine indicata (schema, host e porta del bersaglio): se
-#     la radice o l'indirizzo di partenza reindirizzano altrove il job si
-#     ferma prima di avviare ZAP, e il container di ZAP risolve solo il nome
-#     del bersaglio. Resta fuori da questi limiti solo un indirizzo scritto
-#     con un IP al posto del nome, che l'esplorazione comunque non segue;
+#   - non esplora fuori dall'origine indicata (schema, host e porta del
+#     bersaglio). Prima dell'esplorazione ZAP richiede la radice e
+#     l'indirizzo di partenza seguendo i reindirizzamenti: se portano fuori
+#     dall'origine il job si ferma prima di avviare ZAP, e il container di
+#     ZAP risolve solo il nome del bersaglio. Due casi non sono coperti da
+#     questo secondo limite, e valgono solo se la risposta cambia tra il
+#     controllo e l'avvio di ZAP: un reindirizzamento verso un'altra porta
+#     dello stesso host e uno verso un indirizzo IP scritto al posto del
+#     nome. In entrambi parte una sola richiesta di lettura; l'esplorazione
+#     non prosegue fuori dall'origine;
 #   - non usa credenziali: vede solo ciò che è raggiungibile senza accesso;
 #   - non esegue JavaScript: di un'applicazione a pagina singola vede la
 #     pagina d'ingresso e le risorse che questa richiama, non le viste interne.
