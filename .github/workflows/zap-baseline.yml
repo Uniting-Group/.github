@@ -10,7 +10,9 @@ name: ZAP baseline
 # Cosa non fa, per scelta:
 #   - non compila e non invia moduli (né POST né GET), e non segue i link di
 #     uscita dalla sessione (esclusi dal perimetro dell'esplorazione);
-#   - non esce dall'origine indicata (schema, host e porta del bersaglio);
+#   - non esce dall'origine indicata (schema, host e porta del bersaglio): se
+#     l'indirizzo di partenza reindirizza altrove, il job si ferma prima di
+#     avviare ZAP;
 #   - non usa credenziali: vede solo ciò che è raggiungibile senza accesso;
 #   - non esegue JavaScript: di un'applicazione a pagina singola vede la
 #     pagina d'ingresso e le risorse che questa richiama, non le viste interne.
@@ -96,6 +98,10 @@ jobs:
       - name: Controllo dei parametri
         run: |
           set -euo pipefail
+          # grep lavora riga per riga: un valore su più righe va rifiutato prima.
+          una_riga() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; }
+          una_riga "$TARGET" || { echo "::error::Bersaglio non valido: il valore deve stare su una sola riga."; exit 1; }
+          una_riga "$USER_AGENT" || { echo "::error::user-agent deve stare su una sola riga."; exit 1; }
           if ! printf '%s' "$TARGET" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%-]*)?$'; then
             echo "::error::Bersaglio non valido: serve un indirizzo https senza query, frammento o caratteri speciali."
             exit 1
@@ -107,6 +113,30 @@ jobs:
             echo "::error::user-agent: ammessi lettere, cifre, spazi e . _ ( ) / : ; + - (al massimo 120 caratteri)."
             exit 1
           fi
+
+      # Prima di esplorare, ZAP richiede l'indirizzo di partenza e segue i
+      # reindirizzamenti, anche verso un altro host. Qui la stessa catena si
+      # percorre un passo alla volta: se esce dall'origine il job si ferma
+      # prima di avviare ZAP. Come bersaglio va dato l'indirizzo finale.
+      - name: Controllo dei reindirizzamenti
+        run: |
+          set -euo pipefail
+          origin=$(printf '%s' "$TARGET" | grep -Eo '^https://[^/]+')
+          url="$TARGET"
+          for _ in 1 2 3 4 5 6; do
+            esito=$(curl -sS -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
+              || { echo "::error::Il bersaglio non risponde."; exit 1; }
+            codice=${esito%% *}
+            prossimo=${esito#* }
+            case "$codice" in 3??) ;; *) exit 0 ;; esac
+            [ -n "$prossimo" ] || exit 0
+            case "$prossimo" in
+              "$origin"/*) url="$prossimo" ;;
+              *) echo "::error::Il bersaglio reindirizza fuori dalla propria origine: la scansione non parte."; exit 1 ;;
+            esac
+          done
+          echo "::error::Troppi reindirizzamenti."
+          exit 1
 
       # Il piano contiene solo configurazione delle regole passive,
       # esplorazione, attesa dell'analisi passiva e report.
@@ -123,7 +153,7 @@ jobs:
             contexts:
               - name: baseline
                 urls:
-                  - "${origin}"
+                  - "${origin}/"
                 excludePaths:
                   - "(?i).*(logout|log-out|signout|sign-out).*"
             parameters:
