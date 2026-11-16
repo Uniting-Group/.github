@@ -11,8 +11,10 @@ name: ZAP baseline
 #   - non compila e non invia moduli (né POST né GET), e non segue i link di
 #     uscita dalla sessione (esclusi dal perimetro dell'esplorazione);
 #   - non esce dall'origine indicata (schema, host e porta del bersaglio): se
-#     l'indirizzo di partenza reindirizza altrove, il job si ferma prima di
-#     avviare ZAP;
+#     la radice o l'indirizzo di partenza reindirizzano altrove il job si
+#     ferma prima di avviare ZAP, e il container di ZAP risolve solo il nome
+#     del bersaglio. Resta fuori da questi limiti solo un indirizzo scritto
+#     con un IP al posto del nome, che l'esplorazione comunque non segue;
 #   - non usa credenziali: vede solo ciò che è raggiungibile senza accesso;
 #   - non esegue JavaScript: di un'applicazione a pagina singola vede la
 #     pagina d'ingresso e le risorse che questa richiama, non le viste interne.
@@ -98,6 +100,8 @@ jobs:
       - name: Controllo dei parametri
         run: |
           set -euo pipefail
+          # Le classi di caratteri di grep dipendono dal locale: qui valgono le sole lettere ASCII.
+          export LC_ALL=C
           # grep lavora riga per riga: un valore su più righe va rifiutato prima.
           una_riga() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; }
           una_riga "$TARGET" || { echo "::error::Bersaglio non valido: il valore deve stare su una sola riga."; exit 1; }
@@ -114,29 +118,38 @@ jobs:
             exit 1
           fi
 
-      # Prima di esplorare, ZAP richiede l'indirizzo di partenza e segue i
-      # reindirizzamenti, anche verso un altro host. Qui la stessa catena si
-      # percorre un passo alla volta: se esce dall'origine il job si ferma
-      # prima di avviare ZAP. Come bersaglio va dato l'indirizzo finale.
+      # Prima di esplorare, ZAP richiede la radice dell'origine e l'indirizzo di
+      # partenza e segue i reindirizzamenti, anche verso un altro host. Qui le
+      # stesse catene si percorrono un passo alla volta: se una esce
+      # dall'origine il job si ferma prima di avviare ZAP. Come bersaglio va
+      # dato l'indirizzo finale. Il passo «Scansione» aggiunge un limite di
+      # rete, che vale anche se la risposta cambia dopo questo controllo.
       - name: Controllo dei reindirizzamenti
         run: |
           set -euo pipefail
           origin=$(printf '%s' "$TARGET" | grep -Eo '^https://[^/]+')
-          url="$TARGET"
-          for _ in 1 2 3 4 5 6; do
-            esito=$(curl -sS -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
-              || { echo "::error::Il bersaglio non risponde."; exit 1; }
-            codice=${esito%% *}
-            prossimo=${esito#* }
-            case "$codice" in 3??) ;; *) exit 0 ;; esac
-            [ -n "$prossimo" ] || exit 0
-            case "$prossimo" in
-              "$origin"/*) url="$prossimo" ;;
-              *) echo "::error::Il bersaglio reindirizza fuori dalla propria origine: la scansione non parte."; exit 1 ;;
-            esac
-          done
-          echo "::error::Troppi reindirizzamenti."
-          exit 1
+          catena() {
+            local url="$1" esito codice prossimo
+            for _ in 1 2 3 4 5 6; do
+              esito=$(curl -sS --globoff --proto '=https' -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
+                || { echo "::error::Il bersaglio non risponde."; return 1; }
+              codice=${esito%% *}
+              prossimo=${esito#* }
+              case "$codice" in 3??) ;; *) return 0 ;; esac
+              [ -n "$prossimo" ] || return 0
+              case "$prossimo" in
+                "$origin"/*) url="$prossimo" ;;
+                *) echo "::error::Il bersaglio reindirizza fuori dalla propria origine: la scansione non parte."; return 1 ;;
+              esac
+            done
+            echo "::error::Troppi reindirizzamenti."
+            return 1
+          }
+          # ZAP richiede sia la radice dell'origine sia l'indirizzo di partenza.
+          catena "${origin}/"
+          if [ "$TARGET" != "$origin" ] && [ "$TARGET" != "${origin}/" ]; then
+            catena "$TARGET"
+          fi
 
       # Il piano contiene solo configurazione delle regole passive,
       # esplorazione, attesa dell'analisi passiva e report.
@@ -148,6 +161,12 @@ jobs:
           # L'utente del container non è quello del runner.
           chmod 777 "$wrk"
           origin=$(printf '%s' "$TARGET" | grep -Eo '^https://[^/]+')
+          # ZAP ricava la regola di inclusione dall'indirizzo del contesto senza
+          # proteggere i punti, che nella regex valgono per qualunque carattere.
+          # L'esclusione qui sotto toglie tutto ciò che non comincia con
+          # l'origine esatta. Il controllo dei parametri ammette nell'host solo
+          # lettere, cifre, punti e trattini: il punto è l'unico da proteggere.
+          origin_regex=$(printf '%s' "$origin" | sed 's/\./\\./g')
           cat > "$wrk/plan.yaml" <<EOF
           env:
             contexts:
@@ -155,6 +174,7 @@ jobs:
                 urls:
                   - "${origin}/"
                 excludePaths:
+                  - '(?!${origin_regex}(/|$)).*'
                   - "(?i).*(logout|log-out|signout|sign-out).*"
             parameters:
               failOnError: true
@@ -200,8 +220,14 @@ jobs:
         run: |
           set -euo pipefail
           wrk="$RUNNER_TEMP/zap"
+          # Limite di rete: il container non ha un DNS e conosce solo il nome
+          # del bersaglio, con un indirizzo risolto qui. Una richiesta verso
+          # un altro nome, anche per un reindirizzamento, non parte.
+          host=$(printf '%s' "$TARGET" | sed -E 's#^https://([^/:]+).*#\1#')
+          ip=$(getent ahostsv4 "$host" | awk 'NR==1 {print $1}')
+          [ -n "$ip" ] || { echo "::error::Il nome del bersaglio non si risolve."; exit 1; }
           set +e
-          docker run --rm -v "$wrk":/zap/wrk:rw "$ZAP_IMAGE" \
+          docker run --rm --dns 127.0.0.1 --add-host "${host}:${ip}" -v "$wrk":/zap/wrk:rw "$ZAP_IMAGE" \
             zap.sh -cmd -silent -autorun /zap/wrk/plan.yaml \
             -config "connection.defaultUserAgent=${USER_AGENT}" \
             -config "network.ratelimit.rules.rule(0).description=baseline" \
@@ -220,6 +246,21 @@ jobs:
             exit 1
           fi
           test -s "$wrk/report.json" || { echo "::error::Report non prodotto."; exit 1; }
+          # Un parametro che ZAP non riconosce dà solo un avviso e lascia il
+          # valore predefinito: i limiti dell'esplorazione devono risultare
+          # applicati, altrimenti il job fallisce.
+          if grep -q 'Unrecognised parameter' "$wrk/zap.log"; then
+            echo "::error::ZAP non ha riconosciuto un parametro del piano: i limiti non sono garantiti."
+            exit 1
+          fi
+          for limite in 'threadCount = 1' 'postForm = false' 'processForm = false' 'logoutAvoidance = true'; do
+            grep -qF "Job spider set ${limite}" "$wrk/zap.log" \
+              || { echo "::error::Limite non applicato dallo spider: ${limite}."; exit 1; }
+          done
+          if grep -qE '^Job (activeScan|spiderAjax|spiderClient|openapi|graphql|soap|postman)' "$wrk/zap.log"; then
+            echo "::error::Il piano ha eseguito un job non previsto."
+            exit 1
+          fi
 
       # Nel riepilogo solo i conteggi e i nomi delle regole: gli indirizzi e
       # gli estratti delle risposte restano nei report dell'artifact.
@@ -249,8 +290,15 @@ jobs:
           print(f"ZAP {report.get('@version', '?')}, report del {report.get('@generated', '?')}.")
           if trovati:
               print(f"Indirizzi trovati dall'esplorazione: {trovati.group(1)}.")
+          avvisi = re.findall(r"status code returned : (\d{3}) expected 200", log)
+          if avvisi:
+              print()
+              print(f"**Attenzione:** la radice dell'host ha risposto {avvisi[0]} e non 200. "
+                    "L'esplorazione parte comunque dall'indirizzo indicato, ma può aver trovato poco: "
+                    "un esito con pochi indirizzi non equivale a un esito senza rilievi.")
           print()
-          print("Le occorrenze sono contate fino a dieci per regola.")
+          print("Lo strumento registra un numero limitato di occorrenze per regola: "
+                "il numero indica la presenza del rilievo, non la sua estensione.")
           print()
           print("| Livello | Regole con rilievi | Occorrenze |")
           print("|---|---|---|")
