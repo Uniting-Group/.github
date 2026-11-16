@@ -119,6 +119,11 @@ jobs:
             echo "::error::Bersaglio non valido: serve un indirizzo https senza query, frammento o caratteri speciali."
             exit 1
           fi
+          # Una sola forma per la stessa origine: i confronti successivi sono testuali.
+          if printf '%s' "$TARGET" | grep -Eq '^https://[^/]*[A-Z]|^https://[^/]+:443(/|$)'; then
+            echo "::error::Bersaglio non valido: host in minuscolo e senza la porta 443, che è quella predefinita."
+            exit 1
+          fi
           intero() { printf '%s' "$1" | grep -Eq '^[0-9]{1,2}$' && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
           intero "$SPIDER_MINUTES" 1 20 || { echo "::error::spider-minutes deve essere un intero tra 1 e 20."; exit 1; }
           intero "$REQUESTS_PER_SECOND" 1 10 || { echo "::error::requests-per-second deve essere un intero tra 1 e 10."; exit 1; }
@@ -137,13 +142,20 @@ jobs:
         run: |
           set -euo pipefail
           origin=$(printf '%s' "$TARGET" | grep -Eo '^https://[^/]+')
+          # I cookie ricevuti si rimandano nei passi successivi della stessa
+          # catena, come farebbe un browser; il file si elimina a fine passo.
+          cookie=$(mktemp "$RUNNER_TEMP/cookie.XXXXXX")
+          trap 'rm -f "$cookie"' EXIT
           catena() {
             local url="$1" esito codice prossimo
+            : > "$cookie"
             for _ in 1 2 3 4 5 6; do
-              esito=$(curl -sS --globoff --proto '=https' -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
+              esito=$(curl -sS --globoff --proto '=https' -b "$cookie" -c "$cookie" -o /dev/null --max-time 30 -A "$USER_AGENT" -w '%{http_code} %{redirect_url}' "$url") \
                 || { echo "::error::Il bersaglio non risponde."; return 1; }
               codice=${esito%% *}
               prossimo=${esito#* }
+              # La porta 443 esplicita è la stessa origine di quella omessa.
+              prossimo=$(printf '%s' "$prossimo" | sed -E 's#^(https://[^/:]+):443(/|$)#\1\2#')
               case "$codice" in 3??) ;; *) return 0 ;; esac
               [ -n "$prossimo" ] || return 0
               case "$prossimo" in
