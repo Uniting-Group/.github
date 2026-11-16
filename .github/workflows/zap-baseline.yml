@@ -1,0 +1,251 @@
+name: ZAP baseline
+
+# Scansione di base (baseline) di un servizio web con OWASP ZAP (ONE-1170).
+#
+# Cosa fa: esplora il servizio seguendo i soli link, per un tempo limitato, e
+# applica alle risposte le regole passive di ZAP (intestazioni di sicurezza,
+# cookie, informazioni esposte, librerie note come vulnerabili). Non contiene
+# un job di scansione attiva: non parte nessuna richiesta di attacco.
+#
+# Cosa non fa, per scelta:
+#   - non compila e non invia moduli (né POST né GET), e non segue i link di
+#     uscita dalla sessione (esclusi dal perimetro dell'esplorazione);
+#   - non esce dall'origine indicata (schema, host e porta del bersaglio);
+#   - non usa credenziali: vede solo ciò che è raggiungibile senza accesso;
+#   - non esegue JavaScript: di un'applicazione a pagina singola vede la
+#     pagina d'ingresso e le risorse che questa richiama, non le viste interne.
+#
+# Carico: un solo thread, un tetto di richieste al secondo applicato da ZAP a
+# tutto il traffico verso il bersaglio, durata dell'esplorazione e durata del
+# job limitate. I bersagli si scandiscono uno alla volta.
+#
+# È un workflow riusabile. Questo repository è pubblico: qui non ci sono nomi
+# di host, percorsi o credenziali. L'elenco dei bersagli sta nel workflow che
+# lo richiama, in un repository privato, dove restano anche i log e i report.
+# Si usa solo su servizi propri e con l'approvazione prevista dal piano dei
+# test di sicurezza dell'organizzazione.
+#
+# Esito: il job fallisce se ZAP non parte, se il bersaglio non risponde o se
+# il piano termina con un errore. I rilievi non fanno fallire il job: li
+# esamina chi è responsabile dei test, dal riepilogo e dal report.
+#
+# Report: JSON e HTML come artifact del run, più il piano di automazione e il
+# log di ZAP. Contengono indirizzi ed estratti delle risposte: restano
+# nell'artifact, con la conservazione indicata dal chiamante.
+#
+# ZAP gira nell'immagine ufficiale fissata per digest, con gli add-on che
+# l'immagine contiene: l'opzione -silent impedisce gli aggiornamenti e ogni
+# altra richiesta non legata alla scansione. Per cambiare versione si cambia
+# il digest, con una PR.
+
+on:
+  workflow_call:
+    inputs:
+      targets:
+        description: >-
+          Indirizzi da esplorare, come elenco JSON di stringhe (solo https).
+          Un job per indirizzo, uno alla volta. Ogni job resta nell'origine
+          del proprio indirizzo.
+        type: string
+        required: true
+      spider-minutes:
+        description: Durata massima dell'esplorazione, in minuti (1–20).
+        type: number
+        default: 3
+      requests-per-second:
+        description: Tetto delle richieste al secondo verso il bersaglio (1–10).
+        type: number
+        default: 2
+      timeout-minutes:
+        description: Durata massima del job per ogni bersaglio, in minuti.
+        type: number
+        default: 30
+      retention-days:
+        description: Giorni di conservazione dell'artifact con i report.
+        type: number
+        default: 90
+      user-agent:
+        description: User agent delle richieste, per riconoscerle nei log del bersaglio.
+        type: string
+        default: "zap-baseline (vulnerability assessment)"
+
+permissions: {}
+
+env:
+  # ghcr.io/zaproxy/zaproxy:2.17.0 (immagine del 03/11/2026)
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+
+jobs:
+  baseline:
+    name: baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    env:
+      TARGET: ${{ matrix.target }}
+      SPIDER_MINUTES: ${{ inputs.spider-minutes }}
+      REQUESTS_PER_SECOND: ${{ inputs.requests-per-second }}
+      USER_AGENT: ${{ inputs.user-agent }}
+    steps:
+      # Gli input arrivano solo come variabili d'ambiente e si controllano
+      # prima di usarli: finiscono in un file YAML e in una riga di comando.
+      - name: Controllo dei parametri
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TARGET" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%-]*)?$'; then
+            echo "::error::Bersaglio non valido: serve un indirizzo https senza query, frammento o caratteri speciali."
+            exit 1
+          fi
+          intero() { printf '%s' "$1" | grep -Eq '^[0-9]{1,2}$' && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
+          intero "$SPIDER_MINUTES" 1 20 || { echo "::error::spider-minutes deve essere un intero tra 1 e 20."; exit 1; }
+          intero "$REQUESTS_PER_SECOND" 1 10 || { echo "::error::requests-per-second deve essere un intero tra 1 e 10."; exit 1; }
+          if ! printf '%s' "$USER_AGENT" | grep -Eq '^[A-Za-z0-9 ._()/:;+-]{1,120}$'; then
+            echo "::error::user-agent: ammessi lettere, cifre, spazi e . _ ( ) / : ; + - (al massimo 120 caratteri)."
+            exit 1
+          fi
+
+      # Il piano contiene solo configurazione delle regole passive,
+      # esplorazione, attesa dell'analisi passiva e report.
+      - name: Piano di automazione
+        run: |
+          set -euo pipefail
+          wrk="$RUNNER_TEMP/zap"
+          mkdir -p "$wrk"
+          # L'utente del container non è quello del runner.
+          chmod 777 "$wrk"
+          origin=$(printf '%s' "$TARGET" | grep -Eo '^https://[^/]+')
+          cat > "$wrk/plan.yaml" <<EOF
+          env:
+            contexts:
+              - name: baseline
+                urls:
+                  - "${origin}"
+                excludePaths:
+                  - "(?i).*(logout|log-out|signout|sign-out).*"
+            parameters:
+              failOnError: true
+              failOnWarning: false
+              progressToStdout: true
+          jobs:
+            - type: passiveScan-config
+              parameters:
+                scanOnlyInScope: true
+                enableTags: false
+                maxAlertsPerRule: 10
+            - type: spider
+              parameters:
+                context: baseline
+                url: "${TARGET}"
+                maxDuration: ${SPIDER_MINUTES}
+                maxDepth: 5
+                maxChildren: 50
+                threadCount: 1
+                postForm: false
+                processForm: false
+                logoutAvoidance: true
+                parseGit: false
+                parseSVNEntries: false
+                parseDsStore: false
+                userAgent: "${USER_AGENT}"
+            - type: passiveScan-wait
+              parameters:
+                maxDuration: 5
+            - type: report
+              parameters:
+                template: traditional-json
+                reportDir: /zap/wrk
+                reportFile: report
+            - type: report
+              parameters:
+                template: traditional-html
+                reportDir: /zap/wrk
+                reportFile: report
+          EOF
+
+      - name: Scansione
+        run: |
+          set -euo pipefail
+          wrk="$RUNNER_TEMP/zap"
+          set +e
+          docker run --rm -v "$wrk":/zap/wrk:rw "$ZAP_IMAGE" \
+            zap.sh -cmd -silent -autorun /zap/wrk/plan.yaml \
+            -config "connection.defaultUserAgent=${USER_AGENT}" \
+            -config "network.ratelimit.rules.rule(0).description=baseline" \
+            -config "network.ratelimit.rules.rule(0).enabled=true" \
+            -config "network.ratelimit.rules.rule(0).matchStr=.*" \
+            -config "network.ratelimit.rules.rule(0).regex=true" \
+            -config "network.ratelimit.rules.rule(0).reqsPerSec=${REQUESTS_PER_SECOND}" \
+            -config "network.ratelimit.rules.rule(0).groupBy=HOST" \
+            > "$wrk/zap.log" 2>&1
+          esito=$?
+          set -e
+          grep -E '^(Job|Automation|Plan)|ERROR|WARN' "$wrk/zap.log" || true
+          # 0: piano concluso; 2: concluso con avvisi; il resto è un errore.
+          if [ "$esito" -ne 0 ] && [ "$esito" -ne 2 ]; then
+            echo "::error::ZAP è terminato con il codice ${esito}: vedi zap.log nell'artifact."
+            exit 1
+          fi
+          test -s "$wrk/report.json" || { echo "::error::Report non prodotto."; exit 1; }
+
+      # Nel riepilogo solo i conteggi e i nomi delle regole: gli indirizzi e
+      # gli estratti delle risposte restano nei report dell'artifact.
+      - name: Riepilogo
+        if: always()
+        run: |
+          set -euo pipefail
+          wrk="$RUNNER_TEMP/zap"
+          if [ ! -s "$wrk/report.json" ]; then
+            echo "Nessun report: la scansione non si è conclusa." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 - "$wrk/report.json" "$wrk/zap.log" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import json, re, sys
+
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          log = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+          livelli = {"3": "High", "2": "Medium", "1": "Low", "0": "Informational"}
+          rilievi = {}
+          for site in report.get("site", []):
+              for alert in site.get("alerts", []):
+                  chiave = (alert.get("riskcode", "0"), alert.get("pluginid", ""), alert.get("name", ""))
+                  rilievi[chiave] = rilievi.get(chiave, 0) + int(alert.get("count", "0") or 0)
+          trovati = re.search(r"Job spider found (\d+) URLs", log)
+          print("### Scansione di base")
+          print()
+          print(f"ZAP {report.get('@version', '?')}, report del {report.get('@generated', '?')}.")
+          if trovati:
+              print(f"Indirizzi trovati dall'esplorazione: {trovati.group(1)}.")
+          print()
+          print("Le occorrenze sono contate fino a dieci per regola.")
+          print()
+          print("| Livello | Regole con rilievi | Occorrenze |")
+          print("|---|---|---|")
+          for codice in ("3", "2", "1", "0"):
+              regole = [k for k in rilievi if k[0] == codice]
+              print(f"| {livelli[codice]} | {len(regole)} | {sum(rilievi[k] for k in regole)} |")
+          print()
+          if rilievi:
+              print("| Livello | Regola | Nome | Occorrenze |")
+              print("|---|---|---|---|")
+              for chiave in sorted(rilievi, key=lambda k: (-int(k[0]), k[1])):
+                  nome = chiave[2].replace("|", "/")
+                  print(f"| {livelli.get(chiave[0], chiave[0])} | {chiave[1]} | {nome} | {rilievi[chiave]} |")
+          else:
+              print("Nessun rilievo.")
+          EOF
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: zap-baseline-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/zap/report.json
+            ${{ runner.temp }}/zap/report.html
+            ${{ runner.temp }}/zap/plan.yaml
+            ${{ runner.temp }}/zap/zap.log
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: warn
