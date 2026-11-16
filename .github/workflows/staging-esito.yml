@@ -67,7 +67,7 @@ jobs:
           commenta() {
             local n="$1" testo="$2" id
             id=$(gh api "repos/$REPO/issues/$n/comments?per_page=100" --paginate \
-              --jq '.[] | select(.body | startswith("<!-- deploy-staging -->")) | .id' | tail -n 1)
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- deploy-staging -->"))) | .id' | tail -n 1)
             if [ -n "$id" ]; then
               gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$testo" >/dev/null
             elif [ "${3:-}" != "solo-se-esiste" ]; then
@@ -76,13 +76,20 @@ jobs:
           }
 
           # Il commento di una PR che non è più in prova, se dice ancora altro.
+          # Se il deploy non è riuscito lo staging è rimasto com'era: la PR
+          # può esserci ancora, e il commento lo dice.
           ritira() {
             local n="$1" corpo
             corpo=$(gh api "repos/$REPO/issues/$n/comments?per_page=100" --paginate \
-              --jq '[.[] | select(.body | startswith("<!-- deploy-staging -->"))] | last | .body // ""')
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- deploy-staging -->")))] | last | .body // ""')
             [ -n "$corpo" ] || return 0
             case "$corpo" in "$FUORI"*) return 0 ;; esac
-            commenta "$n" "$FUORI (label \`$LABEL\` tolta, PR chiusa o destinazione cambiata). [Esecuzione]($RUN_URL)" solo-se-esiste
+            if [ "$PUBBLICA" = "success" ]; then
+              commenta "$n" "$FUORI (label \`$LABEL\` tolta, PR chiusa o destinazione cambiata). [Esecuzione]($RUN_URL)" solo-se-esiste
+            else
+              commenta "$n" "$MARCA
+          **Deploy di staging non riuscito**: questa PR non è più tra quelle in prova, ma lo staging è rimasto alla composizione precedente e può contenerla ancora, fino al prossimo deploy riuscito. Il motivo è nell'[esecuzione]($RUN_URL)." solo-se-esiste
+            fi
           }
 
           elenco=$(jq -r '[.[] | "#\(.n)"] | join(" ")' <<<"$INCLUSE")
@@ -107,12 +114,14 @@ jobs:
           Le altre modifiche non ne risentono. Si può aggiornare il branch dal trunk, oppure accordarsi con chi ha l'altra PR in prova su chi prova per primo. [Esecuzione]($RUN_URL)"
           done
 
-          # Tutte le PR aperte che non sono più in prova, non solo quella
-          # dell'evento: un evento in coda può essere stato sostituito da un
-          # altro. In più la PR dell'evento, che può essere chiusa.
+          # Tutte le PR che non sono più in prova, non solo quella dell'evento:
+          # un evento in coda può essere stato sostituito da un altro. Si
+          # guardano le PR aperte e le ultime chiuse (non tutto lo storico:
+          # ogni PR costa una chiamata), più la PR dell'evento.
           in_prova=$(jq -c '[.[][].n]' <<<"[$INCLUSE,$ESCLUSE]")
           {
             gh api "repos/$REPO/pulls?state=open&per_page=100" --paginate --jq '.[].number'
+            gh api "repos/$REPO/pulls?state=closed&sort=updated&direction=desc&per_page=20" --jq '.[].number'
             [ -z "$PR_EVENTO" ] || echo "$PR_EVENTO"
           } | sort -un | while read -r n; do
             jq -e --argjson n "$n" 'index($n) == null' <<<"$in_prova" >/dev/null || continue
