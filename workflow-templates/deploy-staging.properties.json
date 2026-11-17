@@ -1,0 +1,6 @@
+{
+  "name": "Deploy staging (staging composto)",
+  "description": "Deploy di staging che pubblica il trunk più le PR con la label deploy-staging, per provare una modifica prima della review.",
+  "iconName": "octicon rocket",
+  "categories": ["Deployment"]
+}
