@@ -50,6 +50,7 @@ on:
   push:
     branches-ignore:
       - main
+      - production
 
 permissions:
   pull-requests: write

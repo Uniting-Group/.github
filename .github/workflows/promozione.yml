@@ -1,13 +1,21 @@
 name: Promozione
 
 # Controllo delle PR verso il branch di produzione nei repo a due branch
-# (ONE-1246, flusso a trunk unico della GIT-WORKFLOW v2).
+# (ONE-1246; modello con `main` e `production` dal 26/11/2026, ONE-1346).
 #
-# Nei repo con ambiente di staging il trunk è il branch di default (`staging`)
-# e `main` è il branch di produzione: lo aggiornano solo la PR di rilascio,
-# che porta su `main` ciò che è già nel trunk, e gli hotfix. Questo workflow:
+# Nei repo con ambiente di staging il branch di lavoro (trunk) è il branch di
+# default e il branch di produzione lo aggiornano solo la PR di rilascio, che
+# porta in produzione ciò che è già nel trunk, e gli hotfix. Convivono due
+# modelli, riconosciuti dal repo stesso:
 #
-#   1. verifica da dove arriva la PR verso `main`:
+#   - guida 3.0: trunk `main`, produzione `production` (il repo ha il branch
+#     `production`);
+#   - guida 2.0: trunk `staging` (branch di default), produzione `main`.
+#
+# Negli altri repo (default `main` senza `production`: flusso di oggi o repo
+# senza staging) il controllo non si applica. Questo workflow:
+#
+#   1. verifica da dove arriva la PR verso il branch di produzione:
 #        - dal trunk, o da un branch `release/*` fatto solo di commit già
 #          presenti nel trunk  → PR di rilascio;
 #        - da un branch `hotfix/*`                         → hotfix;
@@ -18,13 +26,13 @@ name: Promozione
 #   3. sulla PR di un hotfix lascia, all'apertura, un commento con i comandi
 #      per riportare la correzione nel trunk dopo il merge.
 #
-# Distribuito come Required Workflow tramite un Org Ruleset sul branch `main`
-# dei repo passati al modello: nessun file da aggiungere ai repo. Dove il
-# branch di default è `main` (repo senza staging, o non ancora passati) il
-# job termina subito con esito positivo.
+# Distribuito come Required Workflow tramite un Org Ruleset sul branch di
+# produzione (`production` e, per la guida 2.0, `main`) dei repo passati al
+# modello: nessun file da aggiungere ai repo. Dove il controllo non si
+# applica il job termina subito con esito positivo.
 #
-# Il metodo di merge (merge commit su `main`) non si controlla qui: lo impone
-# il ruleset di repository generato da org-config (ONE-1245).
+# Il metodo di merge (merge commit sul branch di produzione) non si controlla
+# qui: lo impone il ruleset di repository generato da org-config (ONE-1245).
 #
 # Fiducia: sotto il Ruleset il workflow arriva da Uniting-Group/.github@main,
 # quindi una PR non può toglierlo o ammorbidirlo. Il job non fa il checkout e
@@ -76,10 +84,25 @@ jobs:
             const pr = context.payload.pull_request;
             if (!pr) { core.notice('Nessuna PR nel contesto: niente da controllare.'); return; }
             const { owner, repo } = context.repo;
-            const PROD = 'main';
             const trunk = context.payload.repository.default_branch;
             const base = pr.base.ref;
             const head = pr.head.ref;
+
+            // Branch di produzione: `production` se esiste (guida 3.0),
+            // altrimenti `main` se il trunk è un altro (guida 2.0). Solo un 404
+            // vuol dire «non esiste»: ogni altro errore fa fallire il controllo,
+            // invece di scegliere il modello sbagliato.
+            let hasProduction = false;
+            try {
+              await github.rest.repos.getBranch({ owner, repo, branch: 'production' });
+              hasProduction = true;
+            } catch (e) {
+              if (e.status !== 404) {
+                core.setFailed(`Non riesco a verificare il branch production (HTTP ${e.status}): riprovare.`);
+                return;
+              }
+            }
+            const PROD = hasProduction ? 'production' : 'main';
 
             // Fuori dal modello a due branch, o PR non verso la produzione.
             if (trunk === PROD) {
