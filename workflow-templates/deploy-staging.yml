@@ -1,7 +1,7 @@
 name: Deploy staging
 
-# Staging composto: lo staging pubblica il trunk più le PR aperte verso il
-# trunk che portano la label `deploy-staging` (da creare nel repo). La logica
+# Staging composto: lo staging pubblica il trunk (`main`, guida 3.0) più le PR
+# aperte verso il trunk che portano la label `deploy-staging` (da creare nel repo). La logica
 # è in Uniting-Group/.github (staging-componi.yml e staging-esito.yml); qui
 # restano gli eventi e il deploy vero, nel job `pubblica`.
 #
@@ -25,9 +25,9 @@ name: Deploy staging
 on:
   workflow_dispatch:
   push:
-    branches: [staging]
+    branches: [main]
   pull_request_target:
-    branches: [staging]
+    branches: [main]
     types: [labeled, unlabeled, synchronize, closed, reopened, edited]
 
 permissions: {}
@@ -59,6 +59,8 @@ jobs:
       pull-requests: read
       issues: read
     uses: Uniting-Group/.github/.github/workflows/staging-componi.yml@main
+    with:
+      trunk: main
 
   pubblica:
     name: pubblica
@@ -99,6 +101,7 @@ jobs:
       issues: write
     uses: Uniting-Group/.github/.github/workflows/staging-esito.yml@main
     with:
+      trunk: main
       trunk_sha: ${{ needs.componi.outputs.trunk_sha }}
       incluse: ${{ needs.componi.outputs.incluse }}
       escluse: ${{ needs.componi.outputs.escluse }}
